@@ -1,6 +1,7 @@
 import discord
 from discord.ext import commands
 import os
+import json
 from dotenv import load_dotenv
 from flask import Flask
 from threading import Thread
@@ -10,16 +11,37 @@ app = Flask('')
 
 @app.route('/')
 def home():
-    return "Bot is moving now!"
+    return "Bot is running!"
 
 def run_web():
     app.run(host='0.0.0.0', port=8080)
 
 def keep_alive():
     t = Thread(target=run_web)
+    t.daemon = True # プログラム終了時に一緒に終了するように設定
     t.start()
-# -----------------------
 
+# --- 通貨管理用の関数 ---
+def load_data():
+    try:
+        if not os.path.exists('data.json'):
+            with open('data.json', 'w') as f:
+                json.dump({}, f)
+            return {}
+        with open('data.json', 'r') as f:
+            return json.load(f)
+    except Exception as e:
+        print(f"JSON読み込みエラー: {e}")
+        return {}
+
+def save_data(data):
+    try:
+        with open('data.json', 'w') as f:
+            json.dump(data, f, indent=4)
+    except Exception as e:
+        print(f"JSON保存エラー: {e}")
+
+# --- Botの設定 ---
 load_dotenv()
 TOKEN = os.getenv('DISCORD_TOKEN')
 
@@ -30,68 +52,35 @@ intents.voice_states = True
 
 bot = commands.Bot(command_prefix='$', intents=intents)
 
-# --- 通貨管理用の関数 ---
+@bot.event
+async def on_ready():
+    print(f'ログインしました: {bot.user.name}')
+    print("------")
 
-# JSONからデータを読み込む
-def load_data():
-    if not os.path.exists('data.json'):
-        return {}
-    with open('data.json', 'r') as f:
-        return json.load(f)
-
-# JSONにデータを保存する
-def save_data(data):
-    with open('data.json', 'w') as f:
-        json.dump(data, f, indent=4)
-
-# --- コマンドの実装 ---
+@bot.command()
+async def ping(ctx):
+    await ctx.send('pong!')
 
 @bot.command()
 async def money(ctx):
-    """現在の所持金を確認するコマンド"""
     data = load_data()
-    user_id = str(ctx.author.id) # DiscordのIDは文字列として扱うのが定石
-    
-    # ユーザーが登録されていない場合は0円にする
+    user_id = str(ctx.author.id)
     balance = data.get(user_id, 0)
-    
     await ctx.send(f"{ctx.author.display_name}さんの所持金は {balance} 通貨です。")
 
 @bot.command()
-async def pay(ctx, member: discord.Member, amount: int):
-    """お金を他の人に送金するコマンド ($pay @ユーザー 100)"""
-    if amount <= 0:
-        await ctx.send("1以上の金額を指定してください。")
-        return
-
-    data = load_data()
-    sender_id = str(ctx.author.id)
-    receiver_id = str(member.id)
-
-    # 送金者の残高確認
-    sender_balance = data.get(sender_id, 0)
-    if sender_balance < amount:
-        await ctx.send("お金が足りません！")
-        return
-
-    # 計算（競プロ的な値の更新）
-    data[sender_id] = sender_balance - amount
-    data[receiver_id] = data.get(receiver_id, 0) + amount
-
-    save_data(data)
-    await ctx.send(f"{member.display_name}さんに {amount} 通貨を送金しました！")
-
-@bot.command()
 async def earn(ctx):
-    """【テスト用】お金を増やすコマンド"""
     data = load_data()
     user_id = str(ctx.author.id)
-    
     data[user_id] = data.get(user_id, 0) + 100
-    
     save_data(data)
-    await ctx.send(f"100 通貨を手に入れた！現在の残高: {data[user_id]}")
+    await ctx.send(f"100 通貨を手に入れた！ 現在の残高: {data[user_id]}")
 
-# 最後に起動
-keep_alive()
-bot.run(TOKEN)
+# 起動シーケンス
+if __name__ == "__main__":
+    if TOKEN is None:
+        print("エラー: DISCORD_TOKEN が設定されていません。")
+    else:
+        keep_alive()  # Webサーバー起動
+        print("Webサーバーを起動しました。Botを起動します...")
+        bot.run(TOKEN) # Bot起動
