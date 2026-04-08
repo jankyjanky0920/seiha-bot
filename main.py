@@ -14,7 +14,9 @@ def home():
     return "Bot is running!"
 
 def run_web():
-    app.run(host='0.0.0.0', port=8080)
+    # Renderは環境変数 PORT を指定してくることがあるため、それに対応させる
+    port = int(os.environ.get("PORT", 8080))
+    app.run(host='0.0.0.0', port=port)
 
 def keep_alive():
     t = Thread(target=run_web)
