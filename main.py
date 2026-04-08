@@ -81,10 +81,19 @@ async def earn(ctx):
     await ctx.send(f"100 通貨を手に入れた！ 現在の残高: {data[user_id]}")
 
 # 起動シーケンス
+# --- 修正後の起動シーケンス ---
 if __name__ == "__main__":
     if TOKEN is None:
         print("エラー: DISCORD_TOKEN が設定されていません。")
     else:
-        keep_alive()  # Webサーバー起動
-        print("Webサーバーを起動しました。Botを起動します...")
-        bot.run(TOKEN) # Bot起動
+        # 1. まずWebサーバーをスレッドで起動
+        print("Webサーバーを起動しています...")
+        keep_alive()  
+        
+        # 2. 少しだけ待機（Webサーバーを確実に安定させるため）
+        import time
+        time.sleep(2) 
+        
+        # 3. 最後にBotを起動
+        print("Discord Botを起動します...")
+        bot.run(TOKEN)
