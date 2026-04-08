@@ -93,5 +93,5 @@ async def earn(ctx):
     await ctx.send(f"100 通貨を手に入れた！現在の残高: {data[user_id]}")
 
 # 最後に起動
-# keep_alive()
+keep_alive()
 bot.run(TOKEN)
