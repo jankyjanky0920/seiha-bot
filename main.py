@@ -1,13 +1,24 @@
 import discord
 from discord.ext import commands
 import os
-import json # JSONを扱うためのライブラリ
 from dotenv import load_dotenv
 from flask import Flask
 from threading import Thread
 
-# --- (Webサーバーの設定はそのまま) ---
-# ... (省略) ...
+# --- Webサーバーの設定 ---
+app = Flask('')
+
+@app.route('/')
+def home():
+    return "Bot is moving now!"
+
+def run_web():
+    app.run(host='0.0.0.0', port=8080)
+
+def keep_alive():
+    t = Thread(target=run_web)
+    t.start()
+# -----------------------
 
 load_dotenv()
 TOKEN = os.getenv('DISCORD_TOKEN')
