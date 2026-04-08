@@ -14,8 +14,11 @@ def home():
     return "Bot is running!"
 
 def run_web():
-    # Renderの無料枠で最も安定する10000番を直接指定
-    app.run(host='0.0.0.0', port=10000)
+    # Renderから指定されるポート番号を取得、なければ10000を使う
+    port = int(os.environ.get("PORT", 10000))
+    # host='0.0.0.0' を指定することで、外部からのアクセスを許可する
+    # threaded=True を追加して、リクエストを並列で処理できるようにする
+    app.run(host='0.0.0.0', port=port, threaded=True)
 
 def keep_alive():
     t = Thread(target=run_web)
