@@ -14,8 +14,9 @@ def home():
     return "Bot is running!"
 
 def run_web():
-    # Renderは環境変数 PORT を指定してくることがあるため、それに対応させる
-    port = int(os.environ.get("PORT", 8080))
+    # Renderはデフォルトで10000番ポートを期待することが多いため、
+    # 環境変数から取得するか、直接10000を指定します。
+    port = int(os.environ.get("PORT", 10000))
     app.run(host='0.0.0.0', port=port)
 
 def keep_alive():
