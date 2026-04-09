@@ -119,27 +119,25 @@ async def daily_cipher_announce():
 
     try:
         # すでにどこかのVCに入っている場合は、まず切断する
-        for vc in bot.voice_clients:
-            await vc.disconnect(force=True)
+        for old_vc in bot.voice_clients:
+            await old_vc.disconnect(force=True)
         
-        # 接続を試行
+        # 接続を試行し、その結果を変数 vc に入れる
         print(f"{vc_channel.name} への接続を試みます...")
-        await vc_channel.connect(timeout=20.0, reconnect=True)
-        print("VC接続に成功しました！")
+        vc = await vc_channel.connect(timeout=20.0, reconnect=True)
+        print("VC接続に成功しました！検知を開始します。")
 
     except Exception as e:
-        # ここで「なぜ失敗したか」を具体的にログに出すようにします
         print(f"VC接続エラーが発生しました: {e}")
         import traceback
-        traceback.print_exc() # これでエラーのフル詳細がRenderのログに出ます
+        traceback.print_exc()
         return
 
+    # ここから下の rewarded_users.clear() へ続く...
     rewarded_users.clear()
     voice_active_minutes.clear()
 
-    # VCに接続
-    vc = await vc_channel.connect()
-    print(f"{vc_channel.name} に接続し、検知を開始しました。")
+    # (「vc = await vc_channel.connect()」という行は削除してください)
 
     while True:
         now = datetime.datetime.now(JST).time()
