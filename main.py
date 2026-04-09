@@ -86,7 +86,7 @@ CIPHER_VC_ID = 1480212977650110828
 # 日本時間（JST）の設定
 JST = datetime.timezone(datetime.timedelta(hours=9))
 # 毎日 20:50 に設定
-announce_time = datetime.time(hour=15, minute=24, tzinfo=JST)
+announce_time = datetime.time(hour=20, minute=50, tzinfo=JST)
 
 @tasks.loop(time=announce_time)
 async def daily_cipher_announce():
@@ -100,9 +100,9 @@ async def daily_cipher_announce():
 
     # ランダムメニューのリスト
     menus = [
-        "**16小節サイファー**（長尺の練習）",
-        "**2小節サイファー**（韻、即興性向上）",
-        "**バトル**（実践練習）"
+        "**16小節サイファー**",
+        "**2小節サイファー**",
+        "**バトル**"
     ]
     todays_menu = random.choice(menus)
 
@@ -111,8 +111,8 @@ async def daily_cipher_announce():
         f"<@&{MC_ROLE_ID}>\n"
         f"ラップの練習のお時間です！練習したいMCはぜひ <#{CIPHER_VC_ID}> に集まってください🔥\n"
         f"途中退室も途中入場も構いません！\n\n"
-        f"今日の練習メニューはこちらがおすすめ\n"
-        f"21:00~22:00　8小節でサイファー（定番！）\n"
+        f"練習メニュー、こんなのはいかが？\n"
+        f"21:00~22:00　**8小節サイファー**\n"
         f"22:00~23:00　{todays_menu}"
     )
     
