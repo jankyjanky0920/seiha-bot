@@ -27,7 +27,7 @@ CIPHER_VC_ID = 1480212977650110828
 
 # --- 2. 時間設定と監視用変数（順番を直しました！） ---
 JST = datetime.timezone(datetime.timedelta(hours=9))
-announce_time = datetime.time(hour=22, minute=34, tzinfo=JST) # テスト用の時間
+announce_time = datetime.time(hour=22, minute=40, tzinfo=JST) # テスト用の時間
 exit_time_info = datetime.time(hour=23, minute=0, tzinfo=JST)
 
 rewarded_users = set()       # 今日すでに報酬を受け取った人を記録
