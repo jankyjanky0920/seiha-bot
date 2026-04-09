@@ -81,9 +81,12 @@ class MyBot(commands.Bot):
         super().__init__(command_prefix="$", intents=intents)
 
     async def setup_hook(self):
-        await self.tree.sync()
-        print("スラッシュコマンドを同期しました！")
-        # 起動時に自動送信タイマーをスタート
+        # ギルドを指定して同期するように書き換えます
+        guild = discord.Object(id=ALLOWED_GUILD_ID)
+        self.tree.copy_global_to(guild=guild) # グローバル設定をギルドにコピー
+        await self.tree.sync(guild=guild) 
+        
+        print(f"{ALLOWED_GUILD_ID} のスラッシュコマンドを同期しました！")
         daily_cipher_announce.start()
 
 bot = MyBot()
@@ -92,72 +95,55 @@ bot = MyBot()
 async def daily_cipher_announce():
     await bot.wait_until_ready()
     
-    # --- ① お知らせメッセージの送信 ---
-    channel = bot.get_channel(ANNOUNCE_CHANNEL_ID)
-    if not channel:
-        print("エラー: 送信先のチャンネルが見つかりません。")
-        return
+    # --- ① メッセージ送信（省略） ---
+    # ...（今のメッセージ送信コードをここに）
 
-    menus = ["**16小節サイファー**", "**2小節サイファー**", "**バトル**"]
-    todays_menu = random.choice(menus)
-
-    message = (
-        f"（メンション通知）\n"
-        f"ラップの練習のお時間です！練習したいMCはぜひ <#{CIPHER_VC_ID}> に集まってください🔥\n"
-        f"途中退室も途中入場も構いません！\n\n"
-        f"練習メニュー、こんなのはいかが？\n"
-        f"21:00~22:00　**8小節サイファー**\n"
-        f"22:00~23:00　{todays_menu}"
-    )
-    await channel.send(message)
-
-    # --- ② ボイスチャンネル入室と監視 ---
+    # --- ② VC入室 ---
     vc_channel = bot.get_channel(CIPHER_VC_ID)
-    if not vc_channel:
-        print("エラー: VCチャンネルが見つかりません。IDを確認してください。")
-        return
+    if not vc_channel: return
 
     try:
-        # すでにどこかのVCに入っている場合は、まず切断する
+        # 既存の接続があれば切断
         for old_vc in bot.voice_clients:
             await old_vc.disconnect(force=True)
         
-        # 接続を試行し、その結果を変数 vc に入れる
-        print(f"{vc_channel.name} への接続を試みます...")
+        # 接続し、その結果を vc 変数に入れる（ここを1回にまとめる！）
         vc = await vc_channel.connect(timeout=20.0, reconnect=True)
-        print("VC接続に成功しました！検知を開始します。")
+        print(f"{vc_channel.name} に接続しました。")
 
     except Exception as e:
-        print(f"VC接続エラーが発生しました: {e}")
-        import traceback
-        traceback.print_exc()
+        print(f"接続エラー: {e}")
         return
 
-    # ここから下の rewarded_users.clear() へ続く...
+    # 変数のリセット
     rewarded_users.clear()
     voice_active_minutes.clear()
 
-    # (「vc = await vc_channel.connect()」という行は削除してください)
-
+    # --- ③ 監視ループ ---
+    print("検知を開始します。")
     while True:
         now = datetime.datetime.now(JST).time()
+        
+        # 23:30（exit_time_info）を過ぎたらループを抜ける
         if now >= exit_time_info:
+            print("終了時間になりました。")
             break
         
-        await asyncio.sleep(60)
+        await asyncio.sleep(60) # 1分待機
 
         data = load_data()
         updated = False
 
         for member in vc_channel.members:
-            if member.bot:
-                continue
+            if member.bot: continue
 
             v_state = member.voice
+            # マイクON（ミュートしていない）判定
             if v_state and not (v_state.self_mute or v_state.mute or v_state.suppress):
                 user_id = str(member.id)
                 voice_active_minutes[user_id] = voice_active_minutes.get(user_id, 0) + 1
 
+                # 1分（1回検知）でボーナス付与
                 if voice_active_minutes[user_id] >= 1 and user_id not in rewarded_users:
                     bonus = random.randint(50, 100)
                     data[user_id] = data.get(user_id, 0) + bonus
@@ -165,19 +151,16 @@ async def daily_cipher_announce():
                     updated = True
                     
                     try:
-                        await member.send(f"🎤 サイファーお疲れ様です！練習（マイクON）を確認したので、ボーナスとして **{bonus} SP** を付与しました！")
-                    except:
-                        pass
+                        await member.send(f"🎤 ボーナス **{bonus} SP** を付与しました！")
+                    except: pass
 
         if updated:
             save_data(data)
 
-    # --- ③ 23:00になったら退室 ---
-    if bot.voice_clients:
-        for client in bot.voice_clients:
-            if client.channel.id == CIPHER_VC_ID:
-                await client.disconnect()
-                print("23:00になったので退室しました。")
+    # --- ④ 退室 ---
+    if vc.is_connected():
+        await vc.disconnect()
+        print("退室しました。")
 
 @bot.event
 async def on_ready():
