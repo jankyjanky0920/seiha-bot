@@ -25,10 +25,11 @@ ANNOUNCE_CHANNEL_ID = 1480421657913852005
 MC_ROLE_ID = 1480235861244383262
 CIPHER_VC_ID = 1480212977650110828
 
-# --- 2. 時間設定と監視用変数（順番を直しました！） ---
+# --- 2. 時間設定と監視用変数 ---
 JST = datetime.timezone(datetime.timedelta(hours=9))
-announce_time = datetime.time(hour=1, minute=8, tzinfo=JST) # テスト用の時間
-exit_time_info = datetime.time(hour=1, minute=13, tzinfo=JST)
+# ここは本番で動かしたい時間に設定して大丈夫です！
+announce_time = datetime.time(hour=21, minute=0, tzinfo=JST) 
+exit_time_info = datetime.time(hour=23, minute=0, tzinfo=JST)
 
 rewarded_users = set()       # 今日すでに報酬を受け取った人を記録
 voice_active_minutes = {}    # 各ユーザーの「マイクON」時間を記録
@@ -81,9 +82,8 @@ class MyBot(commands.Bot):
         super().__init__(command_prefix="$", intents=intents)
 
     async def setup_hook(self):
-        # ギルドを指定して同期するように書き換えます
         guild = discord.Object(id=ALLOWED_GUILD_ID)
-        self.tree.copy_global_to(guild=guild) # グローバル設定をギルドにコピー
+        self.tree.copy_global_to(guild=guild)
         await self.tree.sync(guild=guild) 
         
         print(f"{ALLOWED_GUILD_ID} のスラッシュコマンドを同期しました！")
@@ -91,11 +91,9 @@ class MyBot(commands.Bot):
 
 bot = MyBot()
 
-@tasks.loop(time=announce_time)
-async def daily_cipher_announce():
-    await bot.wait_until_ready()
-    
-    # --- ① メッセージ送信 ---
+# --- ★ サイファー監視のメイン処理（テストからも呼び出せるように独立させました） ---
+async def run_cipher_logic(end_time_obj):
+    # ① メッセージ送信
     channel = bot.get_channel(ANNOUNCE_CHANNEL_ID)
     if channel:
         menus = ["**16小節サイファー**", "**2小節サイファー**", "**バトル**"]
@@ -110,7 +108,7 @@ async def daily_cipher_announce():
         )
         await channel.send(message)
 
-    # --- ② VC入室 ---
+    # ② VC入室
     vc_channel = bot.get_channel(CIPHER_VC_ID)
     if not vc_channel:
         print("エラー: VCチャンネルが見つかりません。")
@@ -120,7 +118,6 @@ async def daily_cipher_announce():
     rewarded_users.clear()
     voice_active_minutes.clear()
     
-    vc = None
     try:
         # 既存の接続を掃除
         for old_vc in bot.voice_clients:
@@ -128,16 +125,14 @@ async def daily_cipher_announce():
         
         print(f"{vc_channel.name} への接続を開始します...")
         vc = await vc_channel.connect(timeout=20.0, reconnect=True)
-        print("VC接続成功。監視を開始します。")
+        print(f"VC接続成功。監視を開始します。（終了予定: {end_time_obj}）")
 
-        # --- ③ 監視ループ (10秒ごとにチェック) ---
-        check_interval = 10  # 10秒ごとにマイクONを確認
+        # ③ 監視ループ (10秒ごとにチェック)
+        check_interval = 10  
         while True:
             now = datetime.datetime.now(JST).time()
             
-            # 終了予定時刻を過ぎたらループを抜ける
-            # (注: 日付をまたぐ場合は now < announce_time という条件も必要ですが、まずは同日内でテスト)
-            if now >= exit_time_info:
+            if now >= end_time_obj:
                 print("終了時間になったため、ループを終了します。")
                 break
             
@@ -148,18 +143,20 @@ async def daily_cipher_announce():
 
             # 最新のメンバー情報を取得
             current_vc = bot.get_channel(CIPHER_VC_ID)
+            if not current_vc: continue
+
             for member in current_vc.members:
                 if member.bot: continue
 
                 v_state = member.voice
-                # マイクON判定（サーバーミュート・セルフミュート・スピーカーミュートでない）
+                # マイクON判定
                 if v_state and not (v_state.self_mute or v_state.mute or v_state.suppress):
                     user_id = str(member.id)
-                    # 10秒加算
-                    voice_active_minutes[user_id] = voice_active_minutes.get(user_id, 0) + (check_interval / 60)
+                    # 10秒加算 (1分 = 1.0)
+                    voice_active_minutes[user_id] = voice_active_minutes.get(user_id, 0.0) + (check_interval / 60.0)
 
-                    # 合計1分（1.0）以上で、まだ未付与ならボーナス
-                    if voice_active_minutes[user_id] >= 1.0 and user_id not in rewarded_users:
+                    # 小数の計算誤差を考慮して 0.99 以上で判定
+                    if voice_active_minutes[user_id] >= 0.99 and user_id not in rewarded_users:
                         bonus = random.randint(50, 100)
                         data[user_id] = data.get(user_id, 0) + bonus
                         rewarded_users.add(user_id)
@@ -169,23 +166,28 @@ async def daily_cipher_announce():
                         try:
                             await member.send(f"🎤 サイファーお疲れ様です！練習を確認したので **{bonus} SP** を付与しました！")
                         except Exception as e:
-                            print(f"DM送信失敗({member.display_name}): {e}")
+                            pass # DMが送れない場合はスキップ
 
             if updated:
                 save_data(data)
 
     except Exception as e:
         print(f"ループ中にエラーが発生しました: {e}")
-        import traceback
-        traceback.print_exc()
 
     finally:
-        # --- ④ 退室 (何があっても必ず実行) ---
+        # ④ 退室 (何があっても必ず実行)
         print("退室処理を開始します...")
         for current_vc in bot.voice_clients:
             if current_vc.channel.id == CIPHER_VC_ID:
                 await current_vc.disconnect(force=True)
                 print("正常に退室しました。")
+
+# --- 定期実行タスク（本番用） ---
+@tasks.loop(time=announce_time)
+async def daily_cipher_announce():
+    await bot.wait_until_ready()
+    # メインのロジックを呼び出す
+    await run_cipher_logic(exit_time_info)
 
 @bot.event
 async def on_ready():
@@ -193,6 +195,20 @@ async def on_ready():
     print("------")
 
 # --- 6. スラッシュコマンド一覧 ---
+
+@bot.tree.command(name="test-run", description="【管理者用テスト】強制的にサイファー監視を5分間スタートします")
+@app_commands.default_permissions(administrator=True)
+@app_commands.guilds(ALLOWED_GUILD_ID)
+async def test_run(interaction: discord.Interaction):
+    await interaction.response.send_message("テスト用のサイファー監視を開始します！（5分間で自動退室します）", ephemeral=True)
+    
+    # 現在時刻から5分後の時間を計算して終了時間にする
+    now_dt = datetime.datetime.now(JST)
+    test_end_time = (now_dt + datetime.timedelta(minutes=5)).time()
+    
+    # バックグラウンドで監視ロジックを動かす
+    bot.loop.create_task(run_cipher_logic(test_end_time))
+
 @bot.tree.command(name="saifu", description="自分の所持金を表示します")
 @app_commands.guilds(ALLOWED_GUILD_ID)
 async def saifu(interaction: discord.Interaction):
