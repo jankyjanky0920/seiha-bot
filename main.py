@@ -65,20 +65,71 @@ async def on_ready():
 async def ping(ctx):
     await ctx.send('pong!')
 
-@bot.command()
-async def money(ctx):
+# --- コマンド一覧 ---
+
+# $saifu: 自分の所持金を表示
+@bot.command(name="saifu")
+async def saifu(ctx):
     data = load_data()
     user_id = str(ctx.author.id)
     balance = data.get(user_id, 0)
-    await ctx.send(f"{ctx.author.display_name}さんの所持金は {balance} 通貨です。")
+    await ctx.send(f"{ctx.author.display_name}さんの所持金は **{balance} SP** です。")
 
-@bot.command()
-async def earn(ctx):
+# $sent: 他のユーザーに送金
+@bot.command(name="sent")
+async def sent(ctx, member: discord.Member, amount: int):
+    if amount <= 0:
+        await ctx.send("1 SP以上を指定してください。")
+        return
+
     data = load_data()
-    user_id = str(ctx.author.id)
-    data[user_id] = data.get(user_id, 0) + 100
+    sender_id = str(ctx.author.id)
+    receiver_id = str(member.id)
+
+    # 送り主の残高確認
+    sender_balance = data.get(sender_id, 0)
+    if sender_balance < amount:
+        await ctx.send(f"SPが足りません！（現在の残高: {sender_balance} SP）")
+        return
+
+    # 送金処理
+    data[sender_id] = sender_balance - amount
+    data[receiver_id] = data.get(receiver_id, 0) + amount
+    
     save_data(data)
-    await ctx.send(f"100 通貨を手に入れた！ 現在の残高: {data[user_id]}")
+    await ctx.send(f"{ctx.author.display_name}さんから{member.display_name}さんに **{amount} SP** 送金しました！")
+
+# $p-add: 管理者が指定ユーザーのSPを増やす
+@bot.command(name="p-add")
+@commands.has_permissions(administrator=True) # 管理者権限チェック
+async def p_add(ctx, member: discord.Member, amount: int):
+    data = load_data()
+    user_id = str(member.id)
+    
+    data[user_id] = data.get(user_id, 0) + amount
+    
+    save_data(data)
+    await ctx.send(f"管理者操作: {member.display_name}さんに **{amount} SP** 付与しました。")
+
+# $p-remove: 管理者が指定ユーザーのSPを減らす
+@bot.command(name="p-remove")
+@commands.has_permissions(administrator=True) # 管理者権限チェック
+async def p_remove(ctx, member: discord.Member, amount: int):
+    data = load_data()
+    user_id = str(member.id)
+    
+    current_balance = data.get(user_id, 0)
+    data[user_id] = max(0, current_balance - amount) # 0未満にはならないように設定
+    
+    save_data(data)
+    await ctx.send(f"管理者操作: {member.display_name}さんから **{amount} SP** 没収しました。")
+
+# エラーハンドリング（管理者権限がない場合）
+@p_add.error
+@p_remove.error
+async def admin_error(ctx, error):
+    if isinstance(error, commands.MissingPermissions):
+        await ctx.send("このコマンドを実行する権限（管理者権限）がありません。")
 
 # 起動シーケンス
 # --- 修正後の起動シーケンス ---
