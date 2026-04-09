@@ -7,6 +7,9 @@ from flask import Flask
 from threading import Thread
 import pymongo
 import time
+from discord.ext import tasks
+import datetime
+import random
 
 # --- 1. 環境変数の読み込みとDB設定 ---
 load_dotenv()
@@ -66,12 +69,54 @@ class MyBot(commands.Bot):
         super().__init__(command_prefix="$", intents=intents)
 
     async def setup_hook(self):
-        # 起動時にスラッシュコマンドをDiscordに登録
         await self.tree.sync()
         print("スラッシュコマンドを同期しました！")
+        # 起動時に自動送信タイマーをスタートさせる
+        daily_cipher_announce.start()
 
 # ここで一度だけBotを作る
 bot = MyBot()
+
+# --- 自動送信の設定 ---
+# 取得したIDをここに貼り付けます
+ANNOUNCE_CHANNEL_ID = 1480421657913852005
+MC_ROLE_ID = 1480235861244383262
+CIPHER_VC_ID = 1480212977650110828
+
+# 日本時間（JST）の設定
+JST = datetime.timezone(datetime.timedelta(hours=9))
+# 毎日 20:50 に設定
+announce_time = datetime.time(hour=20, minute=50, tzinfo=JST)
+
+@tasks.loop(time=announce_time)
+async def daily_cipher_announce():
+    # Botが完全に起動するまで待つ
+    await bot.wait_until_ready()
+    
+    channel = bot.get_channel(ANNOUNCE_CHANNEL_ID)
+    if not channel:
+        print("エラー: 送信先のチャンネルが見つかりません。")
+        return
+
+    # ランダムメニューのリスト
+    menus = [
+        "**16小節サイファー**（長尺の練習）",
+        "**2小節サイファー**（韻、即興性向上）",
+        "**バトル**（実践練習）"
+    ]
+    todays_menu = random.choice(menus)
+
+    # 送信するメッセージ（IDを使ってメンションやリンク化）
+    message = (
+        f"<@&{MC_ROLE_ID}>\n"
+        f"ラップの練習のお時間です！練習したいMCはぜひ <#{CIPHER_VC_ID}> に集まってください🔥\n"
+        f"途中退室も途中入場も構いません！\n\n"
+        f"今日の練習メニューはこちらがおすすめ\n"
+        f"21:00~22:00　8小節でサイファー（定番！）\n"
+        f"22:00~23:00　{todays_menu}"
+    )
+    
+    await channel.send(message)
 
 @bot.event
 async def on_ready():
