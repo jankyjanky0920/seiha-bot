@@ -1,5 +1,5 @@
 import discord
-from discord.ext import commands
+from discord.ext import commands, tasks
 from discord import app_commands
 import os
 from dotenv import load_dotenv
@@ -7,7 +7,6 @@ from flask import Flask
 from threading import Thread
 import pymongo
 import time
-from discord.ext import tasks
 import datetime
 import random
 import asyncio
@@ -20,8 +19,21 @@ MONGO_URL = os.getenv('MONGO_URL')
 client = pymongo.MongoClient(MONGO_URL, tlsAllowInvalidCertificates=True)
 db = client['discord_bot_db']
 collection = db['user_balance']
-ALLOWED_GUILD_ID = 1480208337533534379
 
+ALLOWED_GUILD_ID = 1480208337533534379
+ANNOUNCE_CHANNEL_ID = 1480421657913852005
+MC_ROLE_ID = 1480235861244383262
+CIPHER_VC_ID = 1480212977650110828
+
+# --- 2. 時間設定と監視用変数（順番を直しました！） ---
+JST = datetime.timezone(datetime.timedelta(hours=9))
+announce_time = datetime.time(hour=22, minute=34, tzinfo=JST) # テスト用の時間
+exit_time_info = datetime.time(hour=23, minute=0, tzinfo=JST)
+
+rewarded_users = set()       # 今日すでに報酬を受け取った人を記録
+voice_active_minutes = {}    # 各ユーザーの「マイクON」時間を記録
+
+# --- 3. データベース用関数 ---
 def load_data():
     data = {}
     try:
@@ -42,7 +54,7 @@ def save_data(data):
     except Exception as e:
         print(f"DB保存エラー: {e}")
 
-# --- 2. Webサーバー (Render対策) ---
+# --- 4. Webサーバー (Render対策) ---
 app = Flask('')
 
 @app.route('/')
@@ -58,13 +70,12 @@ def keep_alive():
     t.daemon = True
     t.start()
 
-# --- 3. Botの基本設定 ---
+# --- 5. Botの基本設定とタスク ---
 intents = discord.Intents.default()
 intents.message_content = True
 intents.members = True
 intents.voice_states = True
 
-# スラッシュコマンドを同期するための特別なBotクラス
 class MyBot(commands.Bot):
     def __init__(self):
         super().__init__(command_prefix="$", intents=intents)
@@ -72,48 +83,16 @@ class MyBot(commands.Bot):
     async def setup_hook(self):
         await self.tree.sync()
         print("スラッシュコマンドを同期しました！")
-        # 起動時に自動送信タイマーをスタートさせる
+        # 起動時に自動送信タイマーをスタート
         daily_cipher_announce.start()
 
-# ここで一度だけBotを作る
 bot = MyBot()
-
-# --- 自動送信の設定 ---
-# 取得したIDをここに貼り付けます
-ANNOUNCE_CHANNEL_ID = 1480421657913852005
-MC_ROLE_ID = 1480235861244383262
-CIPHER_VC_ID = 1480212977650110828
-
-# --- サイファー検知用の設定 ---
-# 1日に付与したユーザーを記録する（再起動でリセットされますが、毎日20:50のタスク開始時に空にします）
-rewarded_users = set()
-# ユーザーごとの有効な滞在時間（分）を記録
-voice_active_minutes = {}
-
-# 23:00の退室時間設定
-exit_time = datetime.time(hour=23, minute=0, tzinfo=JST)
-
-# 日本時間（JST）の設定
-JST = datetime.timezone(datetime.timedelta(hours=9))
-# 毎日 20:50 に設定
-announce_time = datetime.time(hour=22, minute=34, tzinfo=JST) #「「「「「変更
-
-import asyncio  # 冒頭のimportに追加してください
-import random
-
-# --- サイファー監視用の管理変数（関数の外に置いてください） ---
-rewarded_users = set()       # 今日すでに報酬を受け取った人を記録
-voice_active_minutes = {}    # 各ユーザーの「マイクON」時間を記録
-
-# 23:00の退室時間設定
-exit_time_info = datetime.time(hour=23, minute=0, tzinfo=JST)
 
 @tasks.loop(time=announce_time)
 async def daily_cipher_announce():
-    # Botが完全に起動するまで待つ
     await bot.wait_until_ready()
     
-    # --- 1. お知らせメッセージの送信 ---
+    # --- ① お知らせメッセージの送信 ---
     channel = bot.get_channel(ANNOUNCE_CHANNEL_ID)
     if not channel:
         print("エラー: 送信先のチャンネルが見つかりません。")
@@ -123,7 +102,7 @@ async def daily_cipher_announce():
     todays_menu = random.choice(menus)
 
     message = (
-        f"（メンション通知）"
+        f"（メンション通知）\n"
         f"ラップの練習のお時間です！練習したいMCはぜひ <#{CIPHER_VC_ID}> に集まってください🔥\n"
         f"途中退室も途中入場も構いません！\n\n"
         f"練習メニュー、こんなのはいかが？\n"
@@ -132,13 +111,12 @@ async def daily_cipher_announce():
     )
     await channel.send(message)
 
-    # --- 2. ボイスチャンネル入室と監視 ---
+    # --- ② ボイスチャンネル入室と監視 ---
     vc_channel = bot.get_channel(CIPHER_VC_ID)
     if not vc_channel:
         print("エラー: ボイスチャンネルが見つかりません。")
         return
 
-    # 今日の集計データをリセット
     rewarded_users.clear()
     voice_active_minutes.clear()
 
@@ -146,49 +124,41 @@ async def daily_cipher_announce():
     vc = await vc_channel.connect()
     print(f"{vc_channel.name} に接続し、検知を開始しました。")
 
-    # 23:00まで1分ごとにループしてチェック
     while True:
         now = datetime.datetime.now(JST).time()
-        # 23:00を過ぎたらループ終了
         if now >= exit_time_info:
             break
         
-        # 1分間待機
         await asyncio.sleep(60)
 
         data = load_data()
         updated = False
 
-        # VCにいるメンバーの状態を確認
         for member in vc_channel.members:
             if member.bot:
                 continue
 
-            # ミュート（セルフミュート、サーバーミュート両方）していないかチェック
             v_state = member.voice
             if v_state and not (v_state.self_mute or v_state.mute or v_state.suppress):
                 user_id = str(member.id)
-                # 活動時間を1分加算
                 voice_active_minutes[user_id] = voice_active_minutes.get(user_id, 0) + 1
 
-                # 30分経過、かつ、今日まだ報酬をもらっていない場合
-                if voice_active_minutes[user_id] >= 5 and user_id not in rewarded_users: #「「「「「変更
+                # テスト用に5分で設定
+                if voice_active_minutes[user_id] >= 5 and user_id not in rewarded_users:
                     bonus = random.randint(50, 100)
                     data[user_id] = data.get(user_id, 0) + bonus
                     rewarded_users.add(user_id)
                     updated = True
                     
-                    # 本人にDMでお知らせ（送れなくてもエラーにしない）
                     try:
-                        await member.send(f"🎤 サイファーお疲れ様です！30分以上の練習（マイクON）を確認したので、ボーナスとして **{bonus} SP** を付与しました！")
+                        await member.send(f"🎤 サイファーお疲れ様です！練習（マイクON）を確認したので、ボーナスとして **{bonus} SP** を付与しました！")
                     except:
                         pass
 
-        # 誰かにSPが付与されたらDBを更新
         if updated:
             save_data(data)
 
-    # --- 3. 23:00になったら退室 ---
+    # --- ③ 23:00になったら退室 ---
     if bot.voice_clients:
         for client in bot.voice_clients:
             if client.channel.id == CIPHER_VC_ID:
@@ -200,8 +170,7 @@ async def on_ready():
     print(f'ログインしました: {bot.user.name}')
     print("------")
 
-# --- 4. スラッシュコマンド一覧 ---
-
+# --- 6. スラッシュコマンド一覧 ---
 @bot.tree.command(name="saifu", description="自分の所持金を表示します")
 @app_commands.guilds(ALLOWED_GUILD_ID)
 async def saifu(interaction: discord.Interaction):
@@ -231,11 +200,10 @@ async def sent(interaction: discord.Interaction, member: discord.Member, amount:
     data[receiver_id] = data.get(receiver_id, 0) + amount
     save_data(data)
     
-    # member.display_name を使うことで、メンション通知は絶対に飛びません
     await interaction.response.send_message(f"{interaction.user.display_name}さんから{member.display_name}さんに **{amount} SP** 送金しました！")
 
 @bot.tree.command(name="p-add", description="【管理者用】指定ユーザーのSPを増やします")
-@app_commands.default_permissions(administrator=True) # 管理者のみ実行可能
+@app_commands.default_permissions(administrator=True)
 @app_commands.describe(member="付与先のユーザー", amount="増やす金額")
 @app_commands.guilds(ALLOWED_GUILD_ID)
 async def p_add(interaction: discord.Interaction, member: discord.Member, amount: int):
@@ -248,7 +216,7 @@ async def p_add(interaction: discord.Interaction, member: discord.Member, amount
     await interaction.response.send_message(f"管理者操作: {member.display_name}さんに **{amount} SP** 付与しました。")
 
 @bot.tree.command(name="p-remove", description="【管理者用】指定ユーザーのSPを減らします")
-@app_commands.default_permissions(administrator=True) # 管理者のみ実行可能
+@app_commands.default_permissions(administrator=True)
 @app_commands.describe(member="没収先のユーザー", amount="減らす金額")
 @app_commands.guilds(ALLOWED_GUILD_ID)
 async def p_remove(interaction: discord.Interaction, member: discord.Member, amount: int):
@@ -261,8 +229,7 @@ async def p_remove(interaction: discord.Interaction, member: discord.Member, amo
     
     await interaction.response.send_message(f"管理者操作: {member.display_name}さんから **{amount} SP** 没収しました。")
 
-
-# --- 5. 起動シーケンス ---
+# --- 7. 起動シーケンス ---
 if __name__ == "__main__":
     if TOKEN is None:
         print("エラー: DISCORD_TOKEN が設定されていません。")
