@@ -16,6 +16,7 @@ MONGO_URL = os.getenv('MONGO_URL')
 client = pymongo.MongoClient(MONGO_URL, tlsAllowInvalidCertificates=True)
 db = client['discord_bot_db']
 collection = db['user_balance']
+ALLOWED_GUILD_ID = 1480208337533534379
 
 def load_data():
     data = {}
@@ -80,6 +81,7 @@ async def on_ready():
 # --- 4. スラッシュコマンド一覧 ---
 
 @bot.tree.command(name="saifu", description="自分の所持金を表示します")
+@app_commands.guilds(ALLOWED_GUILD_ID)
 async def saifu(interaction: discord.Interaction):
     data = load_data()
     user_id = str(interaction.user.id)
@@ -88,6 +90,7 @@ async def saifu(interaction: discord.Interaction):
 
 @bot.tree.command(name="sent", description="指定したユーザーにSPを送金します")
 @app_commands.describe(member="送金先のユーザー", amount="送る金額")
+@app_commands.guilds(ALLOWED_GUILD_ID)
 async def sent(interaction: discord.Interaction, member: discord.Member, amount: int):
     if amount <= 0:
         await interaction.response.send_message("1 SP以上を指定してください。", ephemeral=True)
@@ -112,6 +115,7 @@ async def sent(interaction: discord.Interaction, member: discord.Member, amount:
 @bot.tree.command(name="p-add", description="【管理者用】指定ユーザーのSPを増やします")
 @app_commands.default_permissions(administrator=True) # 管理者のみ実行可能
 @app_commands.describe(member="付与先のユーザー", amount="増やす金額")
+@app_commands.guilds(ALLOWED_GUILD_ID)
 async def p_add(interaction: discord.Interaction, member: discord.Member, amount: int):
     data = load_data()
     user_id = str(member.id)
@@ -124,6 +128,7 @@ async def p_add(interaction: discord.Interaction, member: discord.Member, amount
 @bot.tree.command(name="p-remove", description="【管理者用】指定ユーザーのSPを減らします")
 @app_commands.default_permissions(administrator=True) # 管理者のみ実行可能
 @app_commands.describe(member="没収先のユーザー", amount="減らす金額")
+@app_commands.guilds(ALLOWED_GUILD_ID)
 async def p_remove(interaction: discord.Interaction, member: discord.Member, amount: int):
     data = load_data()
     user_id = str(member.id)
