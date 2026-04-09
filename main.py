@@ -95,89 +95,97 @@ bot = MyBot()
 async def daily_cipher_announce():
     await bot.wait_until_ready()
     
-    # --- ① メッセージ送信（省略） ---
+    # --- ① メッセージ送信 ---
     channel = bot.get_channel(ANNOUNCE_CHANNEL_ID)
-    if not channel:
-        print("エラー: 送信先のチャンネルが見つかりません。")
-        return
-
-    menus = ["**16小節サイファー**", "**2小節サイファー**", "**バトル**"]
-    todays_menu = random.choice(menus)
-
-    message = (
-        f"（メンション通知）\n"
-        f"ラップの練習のお時間です！練習したいMCはぜひ <#{CIPHER_VC_ID}> に集まってください🔥\n"
-        f"途中退室も途中入場も構いません！\n\n"
-        f"練習メニュー、こんなのはいかが？\n"
-        f"21:00~22:00　**8小節サイファー**\n"
-        f"22:00~23:00　{todays_menu}"
+    if channel:
+        menus = ["**16小節サイファー**", "**2小節サイファー**", "**バトル**"]
+        todays_menu = random.choice(menus)
+        message = (
+            f"（メンション通知）\n"
+            f"ラップの練習のお時間です！練習したいMCはぜひ <#{CIPHER_VC_ID}> に集まってください🔥\n"
+            f"途中退室も途中入場も構いません！\n\n"
+            f"練習メニュー、こんなのはいかが？\n"
+            f"21:00~22:00　**8小節サイファー**\n"
+            f"22:00~23:00　{todays_menu}"
         )
-    
-    await channel.send(message)
+        await channel.send(message)
 
     # --- ② VC入室 ---
     vc_channel = bot.get_channel(CIPHER_VC_ID)
-    if not vc_channel: return
+    if not vc_channel:
+        print("エラー: VCチャンネルが見つかりません。")
+        return
 
+    # 変数をリセット
+    rewarded_users.clear()
+    voice_active_minutes.clear()
+    
+    vc = None
     try:
-        # 既存の接続があれば切断
+        # 既存の接続を掃除
         for old_vc in bot.voice_clients:
             await old_vc.disconnect(force=True)
         
-        # 接続し、その結果を vc 変数に入れる（ここを1回にまとめる！）
+        print(f"{vc_channel.name} への接続を開始します...")
         vc = await vc_channel.connect(timeout=20.0, reconnect=True)
-        print(f"{vc_channel.name} に接続しました。")
+        print("VC接続成功。監視を開始します。")
+
+        # --- ③ 監視ループ (10秒ごとにチェック) ---
+        check_interval = 10  # 10秒ごとにマイクONを確認
+        while True:
+            now = datetime.datetime.now(JST).time()
+            
+            # 終了予定時刻を過ぎたらループを抜ける
+            # (注: 日付をまたぐ場合は now < announce_time という条件も必要ですが、まずは同日内でテスト)
+            if now >= exit_time_info:
+                print("終了時間になったため、ループを終了します。")
+                break
+            
+            await asyncio.sleep(check_interval)
+
+            data = load_data()
+            updated = False
+
+            # 最新のメンバー情報を取得
+            current_vc = bot.get_channel(CIPHER_VC_ID)
+            for member in current_vc.members:
+                if member.bot: continue
+
+                v_state = member.voice
+                # マイクON判定（サーバーミュート・セルフミュート・スピーカーミュートでない）
+                if v_state and not (v_state.self_mute or v_state.mute or v_state.suppress):
+                    user_id = str(member.id)
+                    # 10秒加算
+                    voice_active_minutes[user_id] = voice_active_minutes.get(user_id, 0) + (check_interval / 60)
+
+                    # 合計1分（1.0）以上で、まだ未付与ならボーナス
+                    if voice_active_minutes[user_id] >= 1.0 and user_id not in rewarded_users:
+                        bonus = random.randint(50, 100)
+                        data[user_id] = data.get(user_id, 0) + bonus
+                        rewarded_users.add(user_id)
+                        updated = True
+                        print(f"【ボーナス付与】{member.display_name} に {bonus} SP")
+                        
+                        try:
+                            await member.send(f"🎤 サイファーお疲れ様です！練習を確認したので **{bonus} SP** を付与しました！")
+                        except Exception as e:
+                            print(f"DM送信失敗({member.display_name}): {e}")
+
+            if updated:
+                save_data(data)
 
     except Exception as e:
-        print(f"接続エラー: {e}")
-        return
+        print(f"ループ中にエラーが発生しました: {e}")
+        import traceback
+        traceback.print_exc()
 
-    # 変数のリセット
-    rewarded_users.clear()
-    voice_active_minutes.clear()
-
-    # --- ③ 監視ループ ---
-    print("検知を開始します。")
-    while True:
-        now = datetime.datetime.now(JST).time()
-        
-        # 23:30（exit_time_info）を過ぎたらループを抜ける
-        if now >= exit_time_info:
-            print("終了時間になりました。")
-            break
-        
-        await asyncio.sleep(60) # 1分待機
-
-        data = load_data()
-        updated = False
-
-        for member in vc_channel.members:
-            if member.bot: continue
-
-            v_state = member.voice
-            # マイクON（ミュートしていない）判定
-            if v_state and not (v_state.self_mute or v_state.mute or v_state.suppress):
-                user_id = str(member.id)
-                voice_active_minutes[user_id] = voice_active_minutes.get(user_id, 0) + 1
-
-                # 1分（1回検知）でボーナス付与
-                if voice_active_minutes[user_id] >= 1 and user_id not in rewarded_users:
-                    bonus = random.randint(50, 100)
-                    data[user_id] = data.get(user_id, 0) + bonus
-                    rewarded_users.add(user_id)
-                    updated = True
-                    
-                    try:
-                        await member.send(f"🎤 ボーナス **{bonus} SP** を付与しました！")
-                    except: pass
-
-        if updated:
-            save_data(data)
-
-    # --- ④ 退室 ---
-    if vc.is_connected():
-        await vc.disconnect()
-        print("退室しました。")
+    finally:
+        # --- ④ 退室 (何があっても必ず実行) ---
+        print("退室処理を開始します...")
+        for current_vc in bot.voice_clients:
+            if current_vc.channel.id == CIPHER_VC_ID:
+                await current_vc.disconnect(force=True)
+                print("正常に退室しました。")
 
 @bot.event
 async def on_ready():
