@@ -27,8 +27,8 @@ CIPHER_VC_ID = 1480212977650110828
 
 # --- 2. 時間設定と監視用変数（順番を直しました！） ---
 JST = datetime.timezone(datetime.timedelta(hours=9))
-announce_time = datetime.time(hour=0, minute=47, tzinfo=JST) # テスト用の時間
-exit_time_info = datetime.time(hour=0, minute=52, tzinfo=JST)
+announce_time = datetime.time(hour=0, minute=55, tzinfo=JST) # テスト用の時間
+exit_time_info = datetime.time(hour=1, minute=0, tzinfo=JST)
 
 rewarded_users = set()       # 今日すでに報酬を受け取った人を記録
 voice_active_minutes = {}    # 各ユーザーの「マイクON」時間を記録
