@@ -3,4 +3,4 @@ python-dotenv
 flask
 pymongo[srv]
 PyNaCl
-discord-py-dave
+davey
