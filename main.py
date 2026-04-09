@@ -1,14 +1,43 @@
 import discord
 from discord.ext import commands
+from discord import app_commands
 import os
-import json
 from dotenv import load_dotenv
 from flask import Flask
 from threading import Thread
-import pymongo  # <--- これを追加
+import pymongo
+import time
 
-# --- Webサーバーの設定 ---
-# (ここから keep_alive 終了までは変更なし)
+# --- 1. 環境変数の読み込みとDB設定 ---
+load_dotenv()
+TOKEN = os.getenv('DISCORD_TOKEN')
+
+MONGO_URL = os.getenv('MONGO_URL')
+client = pymongo.MongoClient(MONGO_URL, tlsAllowInvalidCertificates=True)
+db = client['discord_bot_db']
+collection = db['user_balance']
+
+def load_data():
+    data = {}
+    try:
+        for doc in collection.find():
+            data[doc['user_id']] = doc['balance']
+    except Exception as e:
+        print(f"DB読み込みエラー: {e}")
+    return data
+
+def save_data(data):
+    try:
+        for user_id, balance in data.items():
+            collection.update_one(
+                {'user_id': str(user_id)}, 
+                {'$set': {'balance': balance}}, 
+                upsert=True
+            )
+    except Exception as e:
+        print(f"DB保存エラー: {e}")
+
+# --- 2. Webサーバー (Render対策) ---
 app = Flask('')
 
 @app.route('/')
@@ -24,136 +53,95 @@ def keep_alive():
     t.daemon = True
     t.start()
 
-# --- MongoDBの設定 ---
-MONGO_URL = os.getenv('MONGO_URL')
-# 接続を安定させるためのおまじない付きで接続
-client = pymongo.MongoClient(MONGO_URL, tlsAllowInvalidCertificates=True)
-db = client['discord_bot_db']
-collection = db['user_balance']
-
-# --- 通貨管理用の関数 (MongoDB版にアップデート) ---
-def load_data():
-    data = {}
-    try:
-        # DBから全ユーザーのデータを吸い出して辞書に変換
-        for doc in collection.find():
-            data[doc['user_id']] = doc['balance']
-    except Exception as e:
-        print(f"DB読み込みエラー: {e}")
-    return data
-
-def save_data(data):
-    try:
-        # 辞書の中身を1つずつDBに「保存（なければ作成）」
-        for user_id, balance in data.items():
-            collection.update_one(
-                {'user_id': str(user_id)}, 
-                {'$set': {'balance': balance}}, 
-                upsert=True
-            )
-    except Exception as e:
-        print(f"DB保存エラー: {e}")
-
-# --- Botの設定 ---
-load_dotenv()
-TOKEN = os.getenv('DISCORD_TOKEN')
-
+# --- 3. Botの基本設定 ---
 intents = discord.Intents.default()
 intents.message_content = True
 intents.members = True
 intents.voice_states = True
 
-bot = commands.Bot(command_prefix='$', intents=intents)
+# スラッシュコマンドを同期するための特別なBotクラス
+class MyBot(commands.Bot):
+    def __init__(self):
+        super().__init__(command_prefix="$", intents=intents)
+
+    async def setup_hook(self):
+        # 起動時にスラッシュコマンドをDiscordに登録
+        await self.tree.sync()
+        print("スラッシュコマンドを同期しました！")
+
+# ここで一度だけBotを作る
+bot = MyBot()
 
 @bot.event
 async def on_ready():
     print(f'ログインしました: {bot.user.name}')
     print("------")
 
-@bot.command()
-async def ping(ctx):
-    await ctx.send('pong!')
+# --- 4. スラッシュコマンド一覧 ---
 
-# --- コマンド一覧 ---
-
-# $saifu: 自分の所持金を表示
-@bot.command(name="saifu")
-async def saifu(ctx):
+@bot.tree.command(name="saifu", description="自分の所持金を表示します")
+async def saifu(interaction: discord.Interaction):
     data = load_data()
-    user_id = str(ctx.author.id)
+    user_id = str(interaction.user.id)
     balance = data.get(user_id, 0)
-    await ctx.send(f"{ctx.author.display_name}さんの所持金は **{balance} SP** です。")
+    await interaction.response.send_message(f"{interaction.user.display_name}さんの所持金は **{balance} SP** です。")
 
-# $sent: 他のユーザーに送金
-@bot.command(name="sent")
-async def sent(ctx, member: discord.Member, amount: int):
+@bot.tree.command(name="sent", description="指定したユーザーにSPを送金します")
+@app_commands.describe(member="送金先のユーザー", amount="送る金額")
+async def sent(interaction: discord.Interaction, member: discord.Member, amount: int):
     if amount <= 0:
-        await ctx.send("1 SP以上を指定してください。")
+        await interaction.response.send_message("1 SP以上を指定してください。", ephemeral=True)
         return
 
     data = load_data()
-    sender_id = str(ctx.author.id)
+    sender_id = str(interaction.user.id)
     receiver_id = str(member.id)
 
-    # 送り主の残高確認
     sender_balance = data.get(sender_id, 0)
     if sender_balance < amount:
-        await ctx.send(f"SPが足りません！（現在の残高: {sender_balance} SP）")
+        await interaction.response.send_message(f"SPが足りません！（現在の残高: {sender_balance} SP）", ephemeral=True)
         return
 
-    # 送金処理
     data[sender_id] = sender_balance - amount
     data[receiver_id] = data.get(receiver_id, 0) + amount
-    
     save_data(data)
-    await ctx.send(f"{ctx.author.display_name}さんから{member.display_name}さんに **{amount} SP** 送金しました！")
+    
+    # member.display_name を使うことで、メンション通知は絶対に飛びません
+    await interaction.response.send_message(f"{interaction.user.display_name}さんから{member.display_name}さんに **{amount} SP** 送金しました！")
 
-# $p-add: 管理者が指定ユーザーのSPを増やす
-@bot.command(name="p-add")
-@commands.has_permissions(administrator=True) # 管理者権限チェック
-async def p_add(ctx, member: discord.Member, amount: int):
+@bot.tree.command(name="p-add", description="【管理者用】指定ユーザーのSPを増やします")
+@app_commands.default_permissions(administrator=True) # 管理者のみ実行可能
+@app_commands.describe(member="付与先のユーザー", amount="増やす金額")
+async def p_add(interaction: discord.Interaction, member: discord.Member, amount: int):
     data = load_data()
     user_id = str(member.id)
     
     data[user_id] = data.get(user_id, 0) + amount
-    
     save_data(data)
-    await ctx.send(f"管理者操作: {member.display_name}さんに **{amount} SP** 付与しました。")
+    
+    await interaction.response.send_message(f"管理者操作: {member.display_name}さんに **{amount} SP** 付与しました。")
 
-# $p-remove: 管理者が指定ユーザーのSPを減らす
-@bot.command(name="p-remove")
-@commands.has_permissions(administrator=True) # 管理者権限チェック
-async def p_remove(ctx, member: discord.Member, amount: int):
+@bot.tree.command(name="p-remove", description="【管理者用】指定ユーザーのSPを減らします")
+@app_commands.default_permissions(administrator=True) # 管理者のみ実行可能
+@app_commands.describe(member="没収先のユーザー", amount="減らす金額")
+async def p_remove(interaction: discord.Interaction, member: discord.Member, amount: int):
     data = load_data()
     user_id = str(member.id)
     
     current_balance = data.get(user_id, 0)
-    data[user_id] = max(0, current_balance - amount) # 0未満にはならないように設定
-    
+    data[user_id] = max(0, current_balance - amount)
     save_data(data)
-    await ctx.send(f"管理者操作: {member.display_name}さんから **{amount} SP** 没収しました。")
+    
+    await interaction.response.send_message(f"管理者操作: {member.display_name}さんから **{amount} SP** 没収しました。")
 
-# エラーハンドリング（管理者権限がない場合）
-@p_add.error
-@p_remove.error
-async def admin_error(ctx, error):
-    if isinstance(error, commands.MissingPermissions):
-        await ctx.send("このコマンドを実行する権限（管理者権限）がありません。")
 
-# 起動シーケンス
-# --- 修正後の起動シーケンス ---
+# --- 5. 起動シーケンス ---
 if __name__ == "__main__":
     if TOKEN is None:
         print("エラー: DISCORD_TOKEN が設定されていません。")
     else:
-        # 1. まずWebサーバーをスレッドで起動
         print("Webサーバーを起動しています...")
         keep_alive()  
-        
-        # 2. 少しだけ待機（Webサーバーを確実に安定させるため）
-        import time
         time.sleep(2) 
-        
-        # 3. 最後にBotを起動
         print("Discord Botを起動します...")
         bot.run(TOKEN)
