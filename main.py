@@ -86,7 +86,7 @@ CIPHER_VC_ID = 1480212977650110828
 # 日本時間（JST）の設定
 JST = datetime.timezone(datetime.timedelta(hours=9))
 # 毎日 20:50 に設定
-announce_time = datetime.time(hour=20, minute=50, tzinfo=JST)
+announce_time = datetime.time(hour=15, minute=16, tzinfo=JST)
 
 @tasks.loop(time=announce_time)
 async def daily_cipher_announce():
