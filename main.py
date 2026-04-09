@@ -27,8 +27,8 @@ CIPHER_VC_ID = 1480212977650110828
 
 # --- 2. 時間設定と監視用変数（順番を直しました！） ---
 JST = datetime.timezone(datetime.timedelta(hours=9))
-announce_time = datetime.time(hour=23, minute=21, tzinfo=JST) # テスト用の時間
-exit_time_info = datetime.time(hour=23, minute=30, tzinfo=JST)
+announce_time = datetime.time(hour=23, minute=40, tzinfo=JST) # テスト用の時間
+exit_time_info = datetime.time(hour=23, minute=45, tzinfo=JST)
 
 rewarded_users = set()       # 今日すでに報酬を受け取った人を記録
 voice_active_minutes = {}    # 各ユーザーの「マイクON」時間を記録
@@ -158,7 +158,7 @@ async def daily_cipher_announce():
                 user_id = str(member.id)
                 voice_active_minutes[user_id] = voice_active_minutes.get(user_id, 0) + 1
 
-                if voice_active_minutes[user_id] >= 5 and user_id not in rewarded_users:
+                if voice_active_minutes[user_id] >= 1 and user_id not in rewarded_users:
                     bonus = random.randint(50, 100)
                     data[user_id] = data.get(user_id, 0) + bonus
                     rewarded_users.add(user_id)
