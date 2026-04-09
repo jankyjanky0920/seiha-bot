@@ -5,8 +5,10 @@ import json
 from dotenv import load_dotenv
 from flask import Flask
 from threading import Thread
+import pymongo  # <--- これを追加
 
 # --- Webサーバーの設定 ---
+# (ここから keep_alive 終了までは変更なし)
 app = Flask('')
 
 @app.route('/')
@@ -14,36 +16,43 @@ def home():
     return "Bot is running!"
 
 def run_web():
-    # Renderから指定されるポート番号を取得、なければ10000を使う
     port = int(os.environ.get("PORT", 10000))
-    # host='0.0.0.0' を指定することで、外部からのアクセスを許可する
-    # threaded=True を追加して、リクエストを並列で処理できるようにする
     app.run(host='0.0.0.0', port=port, threaded=True)
 
 def keep_alive():
     t = Thread(target=run_web)
-    t.daemon = True # プログラム終了時に一緒に終了するように設定
+    t.daemon = True
     t.start()
 
-# --- 通貨管理用の関数 ---
+# --- MongoDBの設定 ---
+MONGO_URL = os.getenv('MONGO_URL')
+# 接続を安定させるためのおまじない付きで接続
+client = pymongo.MongoClient(MONGO_URL, tlsAllowInvalidCertificates=True)
+db = client['discord_bot_db']
+collection = db['user_balance']
+
+# --- 通貨管理用の関数 (MongoDB版にアップデート) ---
 def load_data():
+    data = {}
     try:
-        if not os.path.exists('data.json'):
-            with open('data.json', 'w') as f:
-                json.dump({}, f)
-            return {}
-        with open('data.json', 'r') as f:
-            return json.load(f)
+        # DBから全ユーザーのデータを吸い出して辞書に変換
+        for doc in collection.find():
+            data[doc['user_id']] = doc['balance']
     except Exception as e:
-        print(f"JSON読み込みエラー: {e}")
-        return {}
+        print(f"DB読み込みエラー: {e}")
+    return data
 
 def save_data(data):
     try:
-        with open('data.json', 'w') as f:
-            json.dump(data, f, indent=4)
+        # 辞書の中身を1つずつDBに「保存（なければ作成）」
+        for user_id, balance in data.items():
+            collection.update_one(
+                {'user_id': str(user_id)}, 
+                {'$set': {'balance': balance}}, 
+                upsert=True
+            )
     except Exception as e:
-        print(f"JSON保存エラー: {e}")
+        print(f"DB保存エラー: {e}")
 
 # --- Botの設定 ---
 load_dotenv()
