@@ -96,7 +96,24 @@ async def daily_cipher_announce():
     await bot.wait_until_ready()
     
     # --- ① メッセージ送信（省略） ---
-    # ...（今のメッセージ送信コードをここに）
+    channel = bot.get_channel(ANNOUNCE_CHANNEL_ID)
+    if not channel:
+        print("エラー: 送信先のチャンネルが見つかりません。")
+        return
+
+    menus = ["**16小節サイファー**", "**2小節サイファー**", "**バトル**"]
+    todays_menu = random.choice(menus)
+
+    message = (
+        f"（メンション通知）\n"
+        f"ラップの練習のお時間です！練習したいMCはぜひ <#{CIPHER_VC_ID}> に集まってください🔥\n"
+        f"途中退室も途中入場も構いません！\n\n
+        f"練習メニュー、こんなのはいかが？\n"
+        f"21:00~22:00　**8小節サイファー**\n"
+        f"22:00~23:00　{todays_menu}"
+        )
+    
+    await channel.send(message)
 
     # --- ② VC入室 ---
     vc_channel = bot.get_channel(CIPHER_VC_ID)
