@@ -10,6 +10,7 @@ import time
 from discord.ext import tasks
 import datetime
 import random
+import asyncio
 
 # --- 1. 環境変数の読み込みとDB設定 ---
 load_dotenv()
@@ -83,40 +84,116 @@ ANNOUNCE_CHANNEL_ID = 1480421657913852005
 MC_ROLE_ID = 1480235861244383262
 CIPHER_VC_ID = 1480212977650110828
 
+# --- サイファー検知用の設定 ---
+# 1日に付与したユーザーを記録する（再起動でリセットされますが、毎日20:50のタスク開始時に空にします）
+rewarded_users = set()
+# ユーザーごとの有効な滞在時間（分）を記録
+voice_active_minutes = {}
+
+# 23:00の退室時間設定
+exit_time = datetime.time(hour=23, minute=0, tzinfo=JST)
+
 # 日本時間（JST）の設定
 JST = datetime.timezone(datetime.timedelta(hours=9))
 # 毎日 20:50 に設定
-announce_time = datetime.time(hour=20, minute=50, tzinfo=JST)
+announce_time = datetime.time(hour=22, minute=28, tzinfo=JST)
+
+import asyncio  # 冒頭のimportに追加してください
+import random
+
+# --- サイファー監視用の管理変数（関数の外に置いてください） ---
+rewarded_users = set()       # 今日すでに報酬を受け取った人を記録
+voice_active_minutes = {}    # 各ユーザーの「マイクON」時間を記録
+
+# 23:00の退室時間設定
+exit_time_info = datetime.time(hour=23, minute=0, tzinfo=JST)
 
 @tasks.loop(time=announce_time)
 async def daily_cipher_announce():
     # Botが完全に起動するまで待つ
     await bot.wait_until_ready()
     
+    # --- 1. お知らせメッセージの送信 ---
     channel = bot.get_channel(ANNOUNCE_CHANNEL_ID)
     if not channel:
         print("エラー: 送信先のチャンネルが見つかりません。")
         return
 
-    # ランダムメニューのリスト
-    menus = [
-        "**16小節サイファー**",
-        "**2小節サイファー**",
-        "**バトル**"
-    ]
+    menus = ["**16小節サイファー**", "**2小節サイファー**", "**バトル**"]
     todays_menu = random.choice(menus)
 
-    # 送信するメッセージ（IDを使ってメンションやリンク化）
     message = (
-        f"<@&{MC_ROLE_ID}>\n"
+        f"（メンション通知）"
         f"ラップの練習のお時間です！練習したいMCはぜひ <#{CIPHER_VC_ID}> に集まってください🔥\n"
         f"途中退室も途中入場も構いません！\n\n"
         f"練習メニュー、こんなのはいかが？\n"
         f"21:00~22:00　**8小節サイファー**\n"
         f"22:00~23:00　{todays_menu}"
     )
-    
     await channel.send(message)
+
+    # --- 2. ボイスチャンネル入室と監視 ---
+    vc_channel = bot.get_channel(CIPHER_VC_ID)
+    if not vc_channel:
+        print("エラー: ボイスチャンネルが見つかりません。")
+        return
+
+    # 今日の集計データをリセット
+    rewarded_users.clear()
+    voice_active_minutes.clear()
+
+    # VCに接続
+    vc = await vc_channel.connect()
+    print(f"{vc_channel.name} に接続し、検知を開始しました。")
+
+    # 23:00まで1分ごとにループしてチェック
+    while True:
+        now = datetime.datetime.now(JST).time()
+        # 23:00を過ぎたらループ終了
+        if now >= exit_time_info:
+            break
+        
+        # 1分間待機
+        await asyncio.sleep(60)
+
+        data = load_data()
+        updated = False
+
+        # VCにいるメンバーの状態を確認
+        for member in vc_channel.members:
+            if member.bot:
+                continue
+
+            # ミュート（セルフミュート、サーバーミュート両方）していないかチェック
+            v_state = member.voice
+            if v_state and not (v_state.self_mute or v_state.mute or v_state.suppress):
+                user_id = str(member.id)
+                # 活動時間を1分加算
+                voice_active_minutes[user_id] = voice_active_minutes.get(user_id, 0) + 1
+
+                # 30分経過、かつ、今日まだ報酬をもらっていない場合
+                if voice_active_minutes[user_id] >= 30 and user_id not in rewarded_users:
+                    bonus = random.randint(50, 100)
+                    data[user_id] = data.get(user_id, 0) + bonus
+                    rewarded_users.add(user_id)
+                    updated = True
+                    
+                    # 本人にDMでお知らせ（送れなくてもエラーにしない）
+                    try:
+                        await member.send(f"🎤 サイファーお疲れ様です！30分以上の練習（マイクON）を確認したので、ボーナスとして **{bonus} SP** を付与しました！")
+                    except:
+                        pass
+
+        # 誰かにSPが付与されたらDBを更新
+        if updated:
+            save_data(data)
+
+    # --- 3. 23:00になったら退室 ---
+    if bot.voice_clients:
+        for client in bot.voice_clients:
+            if client.channel.id == CIPHER_VC_ID:
+                await client.disconnect()
+                print("23:00になったので退室しました。")
 
 @bot.event
 async def on_ready():
