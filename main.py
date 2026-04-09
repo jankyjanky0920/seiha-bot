@@ -27,8 +27,8 @@ CIPHER_VC_ID = 1480212977650110828
 
 # --- 2. 時間設定と監視用変数（順番を直しました！） ---
 JST = datetime.timezone(datetime.timedelta(hours=9))
-announce_time = datetime.time(hour=22, minute=40, tzinfo=JST) # テスト用の時間
-exit_time_info = datetime.time(hour=23, minute=0, tzinfo=JST)
+announce_time = datetime.time(hour=22, minute=57, tzinfo=JST) # テスト用の時間
+exit_time_info = datetime.time(hour=23, minute=20, tzinfo=JST)
 
 rewarded_users = set()       # 今日すでに報酬を受け取った人を記録
 voice_active_minutes = {}    # 各ユーザーの「マイクON」時間を記録
@@ -114,7 +114,24 @@ async def daily_cipher_announce():
     # --- ② ボイスチャンネル入室と監視 ---
     vc_channel = bot.get_channel(CIPHER_VC_ID)
     if not vc_channel:
-        print("エラー: ボイスチャンネルが見つかりません。")
+        print("エラー: VCチャンネルが見つかりません。IDを確認してください。")
+        return
+
+    try:
+        # すでにどこかのVCに入っている場合は、まず切断する
+        for vc in bot.voice_clients:
+            await vc.disconnect(force=True)
+        
+        # 接続を試行
+        print(f"{vc_channel.name} への接続を試みます...")
+        await vc_channel.connect(timeout=20.0, reconnect=True)
+        print("VC接続に成功しました！")
+
+    except Exception as e:
+        # ここで「なぜ失敗したか」を具体的にログに出すようにします
+        print(f"VC接続エラーが発生しました: {e}")
+        import traceback
+        traceback.print_exc() # これでエラーのフル詳細がRenderのログに出ます
         return
 
     rewarded_users.clear()
@@ -143,7 +160,6 @@ async def daily_cipher_announce():
                 user_id = str(member.id)
                 voice_active_minutes[user_id] = voice_active_minutes.get(user_id, 0) + 1
 
-                # テスト用に5分で設定
                 if voice_active_minutes[user_id] >= 5 and user_id not in rewarded_users:
                     bonus = random.randint(50, 100)
                     data[user_id] = data.get(user_id, 0) + bonus
