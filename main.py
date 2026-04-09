@@ -96,7 +96,7 @@ exit_time = datetime.time(hour=23, minute=0, tzinfo=JST)
 # 日本時間（JST）の設定
 JST = datetime.timezone(datetime.timedelta(hours=9))
 # 毎日 20:50 に設定
-announce_time = datetime.time(hour=22, minute=28, tzinfo=JST)
+announce_time = datetime.time(hour=22, minute=34, tzinfo=JST) #「「「「「変更
 
 import asyncio  # 冒頭のimportに追加してください
 import random
@@ -172,7 +172,7 @@ async def daily_cipher_announce():
                 voice_active_minutes[user_id] = voice_active_minutes.get(user_id, 0) + 1
 
                 # 30分経過、かつ、今日まだ報酬をもらっていない場合
-                if voice_active_minutes[user_id] >= 30 and user_id not in rewarded_users:
+                if voice_active_minutes[user_id] >= 5 and user_id not in rewarded_users: #「「「「「変更
                     bonus = random.randint(50, 100)
                     data[user_id] = data.get(user_id, 0) + bonus
                     rewarded_users.add(user_id)
