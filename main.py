@@ -29,8 +29,10 @@ DJ_BOOTH_CHANNEL_ID = 1480284498942759166 # DJブース
 
 # --- 2. 時間設定と監視用変数 ---
 JST = datetime.timezone(datetime.timedelta(hours=9))
+# tasks.loopにはtzinfoが必要
 announce_time = datetime.time(hour=20, minute=50, tzinfo=JST) 
-exit_time_info = datetime.time(hour=23, minute=0, tzinfo=JST)
+# 比較用なのでtzinfoを外す（ここでエラーが起きていました）
+exit_time_info = datetime.time(hour=23, minute=0)
 
 # 監視中の一時的な累積時間 (分)
 voice_active_minutes = {}
@@ -56,11 +58,11 @@ def save_data(data):
     except Exception as e:
         print(f"DB保存エラー: {e}")
 
-# ボーナス受取済みリストをDBから取得
+# ボーナス受取済みリストをDBから取得（エラー対策を強化）
 def get_rewarded_users():
     today = datetime.datetime.now(JST).strftime('%Y-%m-%d')
     doc = daily_collection.find_one({'date': today})
-    return set(doc['users']) if doc else set()
+    return set(doc.get('users', [])) if doc else set()
 
 # ボーナス受取済みリストをDBへ保存
 def save_rewarded_user(user_id):
