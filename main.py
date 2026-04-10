@@ -105,15 +105,22 @@ class MyBot(commands.Bot):
 
 bot = MyBot()
 
-# --- ★ サイファー監視メインロジック ---
-async def run_cipher_logic(end_time_obj):
+# --- ★ サイファー監視メインロジック (判定時間を可変にしました) ---
+async def run_cipher_logic(end_time_obj, is_test=False):
     channel = bot.get_channel(ANNOUNCE_CHANNEL_ID)
     dj_booth = bot.get_channel(DJ_BOOTH_CHANNEL_ID)
     
+    # テスト時と本番時で判定時間を変える
+    required_minutes = 0.99 if is_test else 29.9
+    mode_name = "【テストモード(1分判定)】" if is_test else "【通常モード(30分判定)】"
+    
+    print(f"{mode_name} 監視を開始します。")
+
     if channel:
         menus = ["**16小節サイファー**", "**2小節サイファー**", "**バトル**"]
         message = (
-            f"（メンション通知）\nラップの練習のお時間です！ <#{CIPHER_VC_ID}> に集まれ！🔥\n"
+            f"（メンション通知）\n"
+            f"{'⚠️テスト起動中⚠️ ' if is_test else ''}ラップの練習のお時間です！ <#{CIPHER_VC_ID}> に集まれ！🔥\n"
             f"練習メニュー案：{random.choice(menus)}"
         )
         await channel.send(message)
@@ -134,24 +141,24 @@ async def run_cipher_logic(end_time_obj):
             await asyncio.sleep(check_interval)
             
             data = load_data()
-            rewarded_list = get_rewarded_users() # 毎回最新をDBから確認
+            rewarded_list = get_rewarded_users()
             updated = False
 
             current_vc = bot.get_channel(CIPHER_VC_ID)
             for member in current_vc.members:
                 if member.bot: continue
                 user_id = str(member.id)
-                if user_id in rewarded_list: continue # すでに貰った人はスキップ
+                if user_id in rewarded_list: continue
 
                 v_state = member.voice
                 if v_state and not (v_state.self_mute or v_state.mute or v_state.suppress):
                     voice_active_minutes[user_id] = voice_active_minutes.get(user_id, 0.0) + (check_interval / 60.0)
 
-                    # 30分 (29.9で判定)
-                    if voice_active_minutes[user_id] >= 29.9:
+                    # 動的に設定した時間で判定
+                    if voice_active_minutes[user_id] >= required_minutes:
                         bonus = random.randint(50, 100)
                         data[user_id] = data.get(user_id, 0) + bonus
-                        save_rewarded_user(user_id) # DBに保存
+                        save_rewarded_user(user_id)
                         updated = True
                         
                         if dj_booth:
@@ -163,21 +170,21 @@ async def run_cipher_logic(end_time_obj):
     finally:
         for current_vc in bot.voice_clients: await current_vc.disconnect(force=True)
 
+# --- 通常スケジュール (is_test=False) ---
 @tasks.loop(time=announce_time)
 async def daily_cipher_announce():
     await bot.wait_until_ready()
-    await run_cipher_logic(exit_time_info)
+    await run_cipher_logic(exit_time_info, is_test=False)
 
-# --- 6. 管理者用コマンド (-) ---
-
+# --- 管理者用テストコマンド (is_test=True) ---
 @bot.command(name="testrun")
 @commands.has_permissions(administrator=True)
 async def testrun(ctx):
-    """【管理者】テスト監視開始(10分間)"""
-    await ctx.send("テスト監視を開始します（10分間）")
+    """【管理者】テスト監視開始(10分間 / 1分でボーナス)"""
+    await ctx.send("テスト監視を開始します（10分間 / 1分喋れば報酬付与）")
     now_dt = datetime.datetime.now(JST)
     test_end = (now_dt + datetime.timedelta(minutes=10)).time()
-    bot.loop.create_task(run_cipher_logic(test_end))
+    bot.loop.create_task(run_cipher_logic(test_end, is_test=True))
 
 @bot.command(name="add")
 @commands.has_permissions(administrator=True)
