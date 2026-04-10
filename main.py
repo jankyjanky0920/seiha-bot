@@ -30,7 +30,7 @@ DJ_BOOTH_CHANNEL_ID = 1480284498942759166 # DJブース
 # --- 2. 時間設定と監視用変数 ---
 JST = datetime.timezone(datetime.timedelta(hours=9))
 # tasks.loopにはtzinfoが必要
-announce_time = datetime.time(hour=21, minute=0, tzinfo=JST) 
+announce_time = datetime.time(hour=21, minute=9, tzinfo=JST) 
 # 比較用なのでtzinfoを外す（ここでエラーが起きていました）
 exit_time_info = datetime.time(hour=23, minute=0)
 
