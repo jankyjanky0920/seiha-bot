@@ -247,6 +247,24 @@ async def bulk_add(ctx, *, words_str: str):
             new_count += 1
     await ctx.send(f"{len(words)}個中、{new_count}個の新しい単語を辞書に登録しました。")
 
+@bot.command(name="bulk-remove")
+@commands.has_permissions(administrator=True)
+async def bulk_remove(ctx, *, words_str: str):
+    """【管理者】スペース区切りで単語を一括削除"""
+    # 入力された文字列をリストに分割
+    words_to_delete = words_str.split()
+    
+    if not words_to_delete:
+        return await ctx.send("削除したい単語をスペース区切りで入力してください。")
+
+    # MongoDBの $in 演算子を使って一括削除を実行
+    result = word_collection.delete_many({'word': {'$in': words_to_delete}})
+    
+    # 削除された件数を報告
+    if result.deleted_count > 0:
+        await ctx.send(f"管理者操作: 辞書から {result.deleted_count} 個の単語を削除しました。🗑️")
+    else:
+        await ctx.send("指定された単語は辞書に見当たりませんでした。")
 
 # --- 7. 一般用スラッシュコマンド (/) ---
 
