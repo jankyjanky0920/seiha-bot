@@ -20,6 +20,7 @@ client = pymongo.MongoClient(MONGO_URL, tlsAllowInvalidCertificates=True)
 db = client['discord_bot_db']
 collection = db['user_balance']
 daily_collection = db['daily_status'] # ボーナス受取状況用
+word_collection = db['word_dictionary'] # ★追加: 単語保存用コレクション
 
 ALLOWED_GUILD_ID = 1480208337533534379
 ANNOUNCE_CHANNEL_ID = 1480421657913852005
@@ -105,7 +106,7 @@ class MyBot(commands.Bot):
 
 bot = MyBot()
 
-# --- ★ サイファー監視メインロジック (判定時間を可変にしました) ---
+# --- ★ サイファー監視メインロジック ---
 async def run_cipher_logic(end_time_obj, is_test=False):
     channel = bot.get_channel(ANNOUNCE_CHANNEL_ID)
     dj_booth = bot.get_channel(DJ_BOOTH_CHANNEL_ID)
@@ -176,7 +177,9 @@ async def daily_cipher_announce():
     await bot.wait_until_ready()
     await run_cipher_logic(exit_time_info, is_test=False)
 
-# --- 管理者用テストコマンド (is_test=True) ---
+
+# --- 6. 管理者用コマンド (-) ---
+
 @bot.command(name="testrun")
 @commands.has_permissions(administrator=True)
 async def testrun(ctx):
@@ -212,6 +215,19 @@ async def dislogin(ctx, member: discord.Member):
     remove_rewarded_user(member.id)
     await ctx.send(f"管理者操作: {member.display_name}の今日のデイリー記録を削除しました。再度ログイン可能です。")
 
+@bot.command(name="bulk-add")
+@commands.has_permissions(administrator=True)
+async def bulk_add(ctx, *, words_str: str):
+    """【管理者】★追加: スペース区切りで単語を一括登録"""
+    words = words_str.split()
+    new_count = 0
+    for w in words:
+        if not word_collection.find_one({'word': w}):
+            word_collection.insert_one({'word': w, 'added_by': 'admin_bulk'})
+            new_count += 1
+    await ctx.send(f"{len(words)}個中、{new_count}個の新しい単語を辞書に登録しました。")
+
+
 # --- 7. 一般用スラッシュコマンド (/) ---
 
 @bot.tree.command(name="daily", description="今日のデイリーボーナスを受け取ったか確認します")
@@ -220,7 +236,6 @@ async def daily_status(interaction: discord.Interaction):
     if str(interaction.user.id) in rewarded_list:
         await interaction.response.send_message("今日のデイリーサイファーは【完了】しています！✅", ephemeral=True)
     else:
-        # 現在の累積時間も表示
         current_min = voice_active_minutes.get(str(interaction.user.id), 0)
         await interaction.response.send_message(f"今日のデイリーサイファーは【未完了】です。現在のマイクON時間: 約{int(current_min)}分 / 30分", ephemeral=True)
 
@@ -240,6 +255,43 @@ async def sent(interaction: discord.Interaction, member: discord.Member, amount:
     data[rid] = data.get(rid, 0) + amount
     save_data(data)
     await interaction.response.send_message(f"{member.display_name}さんに **{amount} SP** 送金しました！")
+
+@bot.tree.command(name="word-add", description="★追加: ワードバトルの辞書に新しい単語を追加します")
+@app_commands.describe(word="追加したい単語")
+async def word_add(interaction: discord.Interaction, word: str):
+    exists = word_collection.find_one({'word': word})
+    if exists:
+        return await interaction.response.send_message(f"「{word}」は既に辞書に登録されています！", ephemeral=True)
+    
+    word_collection.insert_one({'word': word, 'added_by': str(interaction.user.id)})
+    await interaction.response.send_message(f"辞書に「{word}」を追加しました！🔥")
+
+@bot.tree.command(name="wordbattle", description="★追加: 辞書からランダムに単語を出します")
+@app_commands.describe(
+    count="出す単語の合計数（指定なしなら1個）",
+    interval="何分ごとに次の単語を出すか（分単位）"
+)
+async def word_battle(interaction: discord.Interaction, count: int = 1, interval: int = 0):
+    if count <= 0:
+        return await interaction.response.send_message("数は1以上にしてください。", ephemeral=True)
+
+    total_words = word_collection.count_documents({})
+    if total_words == 0:
+        return await interaction.response.send_message("辞書が空っぽです！ `/word-add` で単語を追加してください。", ephemeral=True)
+
+    actual_count = min(count, total_words)
+    await interaction.response.send_message(f"🎤 ワードバトル開始！ (合計: {actual_count}個 / 間隔: {interval}分 / 登録数: {total_words})")
+    
+    # DBからランダム取得
+    random_words_cursor = word_collection.aggregate([{ "$sample": { "size": actual_count } }])
+    words_list = [doc['word'] for doc in random_words_cursor]
+
+    for i, word in enumerate(words_list):
+        msg = f"**【{i+1}個目】** 👉   **{word}**"
+        await interaction.channel.send(msg)
+        
+        if i < len(words_list) - 1 and interval > 0:
+            await asyncio.sleep(interval * 60)
 
 # --- 8. 起動 ---
 if __name__ == "__main__":
