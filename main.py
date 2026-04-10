@@ -217,6 +217,24 @@ async def dislogin(ctx, member: discord.Member):
     remove_rewarded_user(member.id)
     await ctx.send(f"管理者操作: {member.display_name}の今日のデイリー記録を削除しました。再度ログイン可能です。")
 
+@bot.command(name="word-remove")
+@commands.has_permissions(administrator=True)
+async def word_remove(ctx, word: str):
+    """【管理者】辞書から単語を削除"""
+    # 存在確認
+    exists = word_collection.find_one({'word': word})
+    
+    if not exists:
+        return await ctx.send(f"「{word}」は辞書に見当たりませんでした。")
+
+    # 削除実行
+    result = word_collection.delete_one({'word': word})
+    
+    if result.deleted_count > 0:
+        await ctx.send(f"管理者操作: 辞書から「{word}」を削除しました。🗑️")
+    else:
+        await ctx.send(f"エラー: 「{word}」の削除に失敗しました。")
+
 @bot.command(name="bulk-add")
 @commands.has_permissions(administrator=True)
 async def bulk_add(ctx, *, words_str: str):
