@@ -182,6 +182,37 @@ async def daily_cipher_announce():
 
 # --- 6. 管理者用コマンド (-) ---
 
+@bot.command(name="join")
+@commands.has_permissions(administrator=True)
+async def join_vc(ctx):
+    """【管理者】ボットをサイファー用VCに入室させる"""
+    vc_channel = bot.get_channel(CIPHER_VC_ID)
+    if not vc_channel:
+        return await ctx.send("エラー: サイファー用のVCが見つかりません。")
+
+    # ボットがすでにどこかのVCにいるかチェック
+    if ctx.guild.voice_client:
+        if ctx.guild.voice_client.channel.id == CIPHER_VC_ID:
+            return await ctx.send("ボットはすでにサイファー用VCにいます！🎤")
+        else:
+            # 別のVCにいる場合は移動させる
+            await ctx.guild.voice_client.move_to(vc_channel)
+            return await ctx.send(f"別のチャンネルから <#{CIPHER_VC_ID}> に移動しました！🎤")
+
+    # どこにもいない場合は新しく接続
+    await vc_channel.connect()
+    await ctx.send(f"<#{CIPHER_VC_ID}> に入室しました！🎤")
+
+@bot.command(name="leave")
+@commands.has_permissions(administrator=True)
+async def leave_vc(ctx):
+    """【管理者】ボットをVCから退室させる"""
+    if ctx.guild.voice_client:
+        await ctx.guild.voice_client.disconnect()
+        await ctx.send("VCから退室しました。👋")
+    else:
+        await ctx.send("現在ボットはどのVCにも入っていません。")
+        
 @bot.command(name="start-bonus")
 @commands.has_permissions(administrator=True)
 async def start_bonus(ctx, duration_minutes: int = 60):
