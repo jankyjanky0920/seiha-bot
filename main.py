@@ -182,6 +182,25 @@ async def daily_cipher_announce():
 
 # --- 6. 管理者用コマンド (-) ---
 
+@bot.command(name="start-bonus")
+@commands.has_permissions(administrator=True)
+async def start_bonus(ctx, duration_minutes: int = 60):
+    """【管理者】手動でボーナス監視セッションを開始（デフォルト60分間）"""
+    # 監視終了時刻を計算
+    now = datetime.datetime.now(JST)
+    end_dt = now + datetime.timedelta(minutes=duration_minutes)
+    
+    await ctx.send(
+        f"ボーナス監視セッションを開始します！🔥\n"
+        f"・監視時間: 今から {duration_minutes} 分間（{end_dt.strftime('%H:%M')} まで）\n"
+        f"・報酬条件: マイクONで合計30分以上の滞在\n"
+        f"ボットが <#{CIPHER_VC_ID}> に入室します。"
+    )
+
+    # 既存のロジックを非同期タスクとして実行
+    # is_test=False なので、自動的に 29.9分（約30分）の判定になります
+    bot.loop.create_task(run_cipher_logic(end_dt, is_test=False))
+    
 @bot.command(name="testrun")
 @commands.has_permissions(administrator=True)
 async def testrun(ctx):
