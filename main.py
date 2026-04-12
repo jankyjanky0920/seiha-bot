@@ -194,6 +194,31 @@ async def daily_ranking_task():
 
 # --- 7. 管理者用コマンド ---
 
+@bot.command(name="bonus")
+@commands.has_permissions(administrator=True)
+async def manual_bonus(ctx, member: discord.Member):
+    """【管理者】指定したユーザーに50~100 SPをランダムに付与"""
+    # 50から100の間でランダムな数値を決定
+    amount = random.randint(50, 100)
+    
+    # $incを使用してDBを直接更新
+    collection.update_one(
+        {'user_id': str(member.id)},
+        {'$inc': {'balance': amount}},
+        upsert=True
+    )
+    
+    # 最新の残高を取得して報告
+    doc = collection.find_one({'user_id': str(member.id)})
+    new_balance = doc.get('balance', 0)
+    
+    await ctx.send(
+        f"🎁 {member.mention} さんにボーナスを付与しました！\n"
+        f"付与額: **{amount} SP**\n"
+        f"現在の所持金: **{new_balance} SP**",
+        allowed_mentions=discord.AllowedMentions.none()
+    )
+
 @bot.command(name="join")
 @commands.has_permissions(administrator=True)
 async def join_vc(ctx):
