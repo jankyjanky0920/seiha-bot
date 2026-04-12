@@ -22,6 +22,7 @@ collection = db['user_balance']
 daily_collection = db['daily_status']
 word_collection = db['word_dictionary']
 
+MC_ROLE_ID = 1480235861244383262
 ALLOWED_GUILD_ID = 1480208337533534379
 ANNOUNCE_CHANNEL_ID = 1492856858078220542
 CIPHER_VC_ID = 1480212977650110828
@@ -30,6 +31,7 @@ DJ_BOOTH_CHANNEL_ID = 1492856858078220542
 # --- 2. 時間設定と監視用変数 ---
 JST = datetime.timezone(datetime.timedelta(hours=9))
 announce_time = datetime.time(hour=20, minute=50, tzinfo=JST) 
+ranking_time = datetime.time(hour=22, minute=0, tzinfo=JST)
 
 voice_active_minutes = {}
 
@@ -174,6 +176,38 @@ async def daily_cipher_announce():
     end_datetime = now + datetime.timedelta(hours=2, minutes=10)
     await run_cipher_logic(end_datetime, is_test=False)
 
+# --- ランキング取得ロジック ---
+async def get_sp_ranking():
+    guild = bot.get_guild(ALLOWED_GUILD_ID)
+    if not guild:
+        return "サーバーが見つかりません。"
+
+    mc_role = guild.get_role(MC_ROLE_ID)
+    if not mc_role:
+        return "MCロールが見つかりません。設定を確認してください。"
+
+    # DBから全データを取得
+    data = load_data()
+    
+    # MCロールを持っているメンバーのみを抽出
+    ranking_data = []
+    for member in mc_role.members:
+        sp = data.get(str(member.id), 0)
+        ranking_data.append((member.display_name, sp))
+
+    # SPが多い順にソート
+    ranking_data.sort(key=lambda x: x[1], reverse=True)
+
+    if not ranking_data:
+        return "ランキング対象のユーザーがいません。"
+
+    msg = "🏆 **MC限定 SPランキング** 🏆\n"
+    for i, (name, sp) in enumerate(ranking_data[:10], 1): # 上位10名を表示
+        medal = "🥇" if i == 1 else "🥈" if i == 2 else "🥉" if i == 3 else f"{i}位"
+        msg += f"{medal} {name}: **{sp} SP**\n"
+    
+    return msg
+
 # --- 6. 管理者用コマンド (-) ---
 
 @bot.command(name="testrun")
@@ -239,6 +273,22 @@ async def dislogin(ctx, member: discord.Member):
 
 # --- 7. 一般用スラッシュコマンド (/) ---
 
+# --- 定期タスク (22:00) ---
+@tasks.loop(time=ranking_time)
+async def daily_ranking_announce():
+    await bot.wait_until_ready()
+    channel = bot.get_channel(DJ_BOOTH_CHANNEL_ID)
+    if channel:
+        ranking_msg = await get_sp_ranking()
+        # allowed_mentions=None にすることで、名前を出しても通知が飛ばなくなります
+        await channel.send(ranking_msg, allowed_mentions=discord.AllowedMentions.none())
+
+# --- スラッシュコマンド ---
+@bot.tree.command(name="ranking", description="MCロール保持者のSPランキングを表示します")
+async def ranking(interaction: discord.Interaction):
+    ranking_msg = await get_sp_ranking()
+    await interaction.response.send_message(ranking_msg, allowed_mentions=discord.AllowedMentions.none())
+    
 @bot.tree.command(name="daily", description="今日のデイリーボーナスを受け取ったか確認します")
 async def daily_status(interaction: discord.Interaction):
     rewarded_list = get_rewarded_users()
