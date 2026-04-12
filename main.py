@@ -91,8 +91,9 @@ class MyBot(commands.Bot):
         guild = discord.Object(id=ALLOWED_GUILD_ID)
         self.tree.copy_global_to(guild=guild)
         await self.tree.sync(guild=guild) 
-        self.daily_cipher_task.start()
-        self.daily_ranking_task.start()
+        
+        daily_cipher_task.start() 
+        daily_ranking_task.start()
 
 bot = MyBot()
 
