@@ -6,7 +6,6 @@ from dotenv import load_dotenv
 from flask import Flask
 from threading import Thread
 import pymongo
-import time
 import datetime
 import random
 import asyncio
@@ -28,33 +27,27 @@ ANNOUNCE_CHANNEL_ID = 1492856858078220542
 CIPHER_VC_ID = 1480212977650110828
 DJ_BOOTH_CHANNEL_ID = 1492856858078220542
 
-# --- 2. 時間設定と監視用変数 ---
+# --- 2. 時間設定 ---
 JST = datetime.timezone(datetime.timedelta(hours=9))
-announce_time = datetime.time(hour=20, minute=50, tzinfo=JST) 
-ranking_time = datetime.time(hour=22, minute=0, tzinfo=JST)
+# 20:50に自動開始
+START_TIME = datetime.time(hour=20, minute=50, tzinfo=JST) 
+RANKING_TIME = datetime.time(hour=22, minute=0, tzinfo=JST)
 
+# 監視用変数
 voice_active_minutes = {}
 
 # --- 3. データベース用関数 ---
-def load_data():
-    data = {}
-    try:
-        for doc in collection.find():
-            data[doc['user_id']] = doc['balance']
-    except Exception as e:
-        print(f"DB読み込みエラー: {e}")
-    return data
+def get_user_balance(user_id):
+    doc = collection.find_one({'user_id': str(user_id)})
+    return doc['balance'] if doc else 0
 
-def save_data(data):
-    try:
-        for user_id, balance in data.items():
-            collection.update_one(
-                {'user_id': str(user_id)}, 
-                {'$set': {'balance': balance}}, 
-                upsert=True
-            )
-    except Exception as e:
-        print(f"DB保存エラー: {e}")
+def add_user_balance(user_id, amount):
+    """ユーザーのSPを加算する (最適化済み)"""
+    collection.update_one(
+        {'user_id': str(user_id)},
+        {'$inc': {'balance': amount}},
+        upsert=True
+    )
 
 def get_rewarded_users():
     today = datetime.datetime.now(JST).strftime('%Y-%m-%d')
@@ -76,13 +69,13 @@ def remove_rewarded_user(user_id):
         {'$pull': {'users': str(user_id)}}
     )
 
-# --- 4. Webサーバー (Render対策) ---
+# --- 4. Webサーバー (Render/Keep-alive用) ---
 app = Flask('')
 @app.route('/')
 def home(): return "Bot is running!"
 def run_web():
     port = int(os.environ.get("PORT", 10000))
-    app.run(host='0.0.0.0', port=port, threaded=True)
+    app.run(host='0.0.0.0', port=port)
 def keep_alive():
     t = Thread(target=run_web)
     t.daemon = True
@@ -98,133 +91,107 @@ class MyBot(commands.Bot):
         guild = discord.Object(id=ALLOWED_GUILD_ID)
         self.tree.copy_global_to(guild=guild)
         await self.tree.sync(guild=guild) 
-        daily_cipher_announce.start()
+        self.daily_cipher_task.start()
+        self.daily_ranking_task.start()
 
 bot = MyBot()
 
 # --- ★ サイファー監視メインロジック ---
-async def run_cipher_logic(end_datetime, is_test=False):
+async def run_cipher_logic(end_datetime):
     channel = bot.get_channel(ANNOUNCE_CHANNEL_ID)
     dj_booth = bot.get_channel(DJ_BOOTH_CHANNEL_ID)
+    vc_channel = bot.get_channel(CIPHER_VC_ID)
     
-    required_minutes = 0.99 if is_test else 29.9
-    mode_name = "【テストモード(1分判定)】" if is_test else "【通常モード(30分判定)】"
-    
-    print(f"{mode_name} 監視を開始します。終了予定: {end_datetime.strftime('%H:%M')}")
+    if not vc_channel:
+        print("エラー: VCチャンネルが見つかりません。")
+        return
 
+    required_minutes = 30.0  # 30分固定
+    print(f"【サイファー監視開始】終了予定: {end_datetime.strftime('%H:%M')}")
+
+    # 開始アナウンス
     if channel:
         menus = ["**16小節サイファー**", "**2小節サイファー**", "**バトル**"]
         message = (
-            f"（メンション通知）\n"
-            f"{'⚠️テスト起動中⚠️ ' if is_test else ''}ラップの練習のお時間です！ <#{CIPHER_VC_ID}> に集まれ！🔥\n"
+            f"ラップの練習のお時間です！ <#{CIPHER_VC_ID}> に集まれ！🔥\n"
             f"練習メニュー案：{random.choice(menus)}"
         )
         await channel.send(message)
 
     voice_active_minutes.clear()
-    vc_channel = bot.get_channel(CIPHER_VC_ID)
-    if not vc_channel: return
 
     try:
-        for old_vc in bot.voice_clients: await old_vc.disconnect(force=True)
-        vc = await vc_channel.connect(timeout=20.0, reconnect=True)
+        # 既存の接続があれば切断
+        for old_vc in bot.voice_clients:
+            await old_vc.disconnect(force=True)
         
-        check_interval = 10  
+        # VCに入室
+        vc_client = await vc_channel.connect(timeout=20.0, reconnect=True)
+        
+        check_interval = 20 # チェック間隔（秒）
         while True:
             now = datetime.datetime.now(JST)
-            if now >= end_datetime: break
+            if now >= end_datetime:
+                break
             
             await asyncio.sleep(check_interval)
             
-            data = load_data()
             rewarded_list = get_rewarded_users()
-            updated = False
-
             current_vc = bot.get_channel(CIPHER_VC_ID)
             if not current_vc: break
 
             for member in current_vc.members:
                 if member.bot: continue
                 user_id = str(member.id)
+                
+                # すでに今日報酬をもらっている人はスキップ
                 if user_id in rewarded_list: continue
 
+                # ミュートしていないかチェック
                 v_state = member.voice
                 if v_state and not (v_state.self_mute or v_state.mute or v_state.suppress):
+                    # 加算処理
                     voice_active_minutes[user_id] = voice_active_minutes.get(user_id, 0.0) + (check_interval / 60.0)
 
+                    # 30分経過判定
                     if voice_active_minutes[user_id] >= required_minutes:
                         bonus = random.randint(50, 100)
-                        data[user_id] = data.get(user_id, 0) + bonus
-                        save_rewarded_user(user_id)
-                        updated = True
+                        add_user_balance(user_id, bonus) # DB更新
+                        save_rewarded_user(user_id)     # 当日済みリストへ
                         
+                        new_balance = get_user_balance(user_id)
                         if dj_booth:
-                            await dj_booth.send(f"{member.mention} さんのデイリーサイファーを確認！**{bonus} SP** を付与しました。現在の所持金は **{data[user_id]} SP** です。")
-
-            if updated: save_data(data)
+                            await dj_booth.send(f"{member.mention} さんのデイリーサイファー（30分）を確認！**{bonus} SP** を付与しました。現在の所持金: **{new_balance} SP**")
 
     except Exception as e: 
         print(f"Error in run_cipher_logic: {e}")
     finally:
-        for current_vc in bot.voice_clients: await current_vc.disconnect(force=True)
-        print("監視終了。退室しました。")
+        # 終了時間になったら退室
+        for current_vc_client in bot.voice_clients:
+            await current_vc_client.disconnect(force=True)
+        print("23:00になりました。監視を終了し、退室しました。")
 
-@tasks.loop(time=announce_time)
-async def daily_cipher_announce():
+# --- 6. 定期タスク ---
+
+@tasks.loop(time=START_TIME)
+async def daily_cipher_task():
+    """20:50に起動し、23:00まで監視する"""
     await bot.wait_until_ready()
     now = datetime.datetime.now(JST)
-    end_datetime = now + datetime.timedelta(hours=2, minutes=10)
-    await run_cipher_logic(end_datetime, is_test=False)
+    # 今日の23:00を終了時刻に設定
+    end_datetime = now.replace(hour=23, minute=0, second=0, microsecond=0)
+    await run_cipher_logic(end_datetime)
 
-# --- ランキング取得ロジック ---
-async def get_sp_ranking():
-    guild = bot.get_guild(ALLOWED_GUILD_ID)
-    if not guild:
-        return "サーバーが見つかりません。"
+@tasks.loop(time=RANKING_TIME)
+async def daily_ranking_task():
+    """22:00にランキングを表示"""
+    await bot.wait_until_ready()
+    channel = bot.get_channel(DJ_BOOTH_CHANNEL_ID)
+    if channel:
+        ranking_msg = await get_sp_ranking()
+        await channel.send(ranking_msg, allowed_mentions=discord.AllowedMentions.none())
 
-    mc_role = guild.get_role(MC_ROLE_ID)
-    if not mc_role:
-        return "MCロールが見つかりません。設定を確認してください。"
-
-    # DBから全データを取得
-    data = load_data()
-    
-    # MCロールを持っているメンバーのみを抽出
-    ranking_data = []
-    for member in mc_role.members:
-        sp = data.get(str(member.id), 0)
-        ranking_data.append((member.display_name, sp))
-
-    # SPが多い順にソート
-    ranking_data.sort(key=lambda x: x[1], reverse=True)
-
-    if not ranking_data:
-        return "ランキング対象のユーザーがいません。"
-
-    msg = "🏆 **MC限定 SPランキング** 🏆\n"
-    for i, (name, sp) in enumerate(ranking_data[:10], 1): # 上位10名を表示
-        medal = "🥇" if i == 1 else "🥈" if i == 2 else "🥉" if i == 3 else f"{i}位"
-        msg += f"{medal} {name}: **{sp} SP**\n"
-    
-    return msg
-
-# --- 6. 管理者用コマンド (-) ---
-
-@bot.command(name="testrun")
-@commands.has_permissions(administrator=True)
-async def testrun(ctx):
-    await ctx.send("テスト監視を開始します（10分間 / 1分で報酬）")
-    now_dt = datetime.datetime.now(JST)
-    test_end = now_dt + datetime.timedelta(minutes=10)
-    bot.loop.create_task(run_cipher_logic(test_end, is_test=True))
-
-@bot.command(name="start-bonus")
-@commands.has_permissions(administrator=True)
-async def start_bonus(ctx, duration_minutes: int = 60):
-    now = datetime.datetime.now(JST)
-    end_dt = now + datetime.timedelta(minutes=duration_minutes)
-    await ctx.send(f"手動ボーナス開始！終了予定: {end_dt.strftime('%H:%M')}")
-    bot.loop.create_task(run_cipher_logic(end_dt, is_test=False))
+# --- 7. 管理者用コマンド ---
 
 @bot.command(name="join")
 @commands.has_permissions(administrator=True)
@@ -242,117 +209,55 @@ async def leave_vc(ctx):
         await ctx.guild.voice_client.disconnect()
         await ctx.send("退室しました。👋")
 
-@bot.command(name="word-remove")
-@commands.has_permissions(administrator=True)
-async def word_remove(ctx, word: str):
-    exists = word_collection.find_one({'word': word})
-    if not exists: return await ctx.send(f"「{word}」はありません。")
-    word_collection.delete_one({'word': word})
-    await ctx.send(f"「{word}」を削除しました。")
-
-@bot.command(name="bulk-remove")
-@commands.has_permissions(administrator=True)
-async def bulk_remove(ctx, *, words_str: str):
-    words_to_delete = words_str.split()
-    result = word_collection.delete_many({'word': {'$in': words_to_delete}})
-    await ctx.send(f"{result.deleted_count} 個の単語を削除しました。")
-
 @bot.command(name="add")
 @commands.has_permissions(administrator=True)
 async def add_sp(ctx, member: discord.Member, amount: int):
-    data = load_data()
-    data[str(member.id)] = data.get(str(member.id), 0) + amount
-    save_data(data)
-    await ctx.send(f"{member.display_name}に **{amount} SP** 付与。")
+    add_user_balance(member.id, amount)
+    await ctx.send(f"{member.display_name}に **{amount} SP** 付与しました。")
 
-@bot.command(name="dislogin")
-@commands.has_permissions(administrator=True)
-async def dislogin(ctx, member: discord.Member):
-    remove_rewarded_user(member.id)
-    await ctx.send(f"{member.display_name}のデイリー記録を削除。")
+# --- 8. スラッシュコマンド (一般) ---
 
-# --- 7. 一般用スラッシュコマンド (/) ---
+async def get_sp_ranking():
+    guild = bot.get_guild(ALLOWED_GUILD_ID)
+    if not guild: return "サーバーが見つかりません。"
+    mc_role = guild.get_role(MC_ROLE_ID)
+    if not mc_role: return "MCロールが見つかりません。"
 
-# --- 定期タスク (22:00) ---
-@tasks.loop(time=ranking_time)
-async def daily_ranking_announce():
-    await bot.wait_until_ready()
-    channel = bot.get_channel(DJ_BOOTH_CHANNEL_ID)
-    if channel:
-        ranking_msg = await get_sp_ranking()
-        # allowed_mentions=None にすることで、名前を出しても通知が飛ばなくなります
-        await channel.send(ranking_msg, allowed_mentions=discord.AllowedMentions.none())
+    # ランキング作成（スコアがある人のみ抽出）
+    ranking_data = []
+    for member in mc_role.members:
+        sp = get_user_balance(member.id)
+        ranking_data.append((member.display_name, sp))
 
-# --- スラッシュコマンド ---
-@bot.tree.command(name="ranking", description="MCロール保持者のSPランキングを表示します")
+    ranking_data.sort(key=lambda x: x[1], reverse=True)
+    if not ranking_data: return "ランキング対象のユーザーがいません。"
+
+    msg = "🏆 **MC限定 SPランキング** 🏆\n"
+    for i, (name, sp) in enumerate(ranking_data[:10], 1):
+        medal = "🥇" if i == 1 else "🥈" if i == 2 else "🥉" if i == 3 else f"{i}位"
+        msg += f"{medal} {name}: **{sp} SP**\n"
+    return msg
+
+@bot.tree.command(name="ranking", description="SPランキングを表示")
 async def ranking(interaction: discord.Interaction):
     ranking_msg = await get_sp_ranking()
     await interaction.response.send_message(ranking_msg, allowed_mentions=discord.AllowedMentions.none())
-    
-@bot.tree.command(name="daily", description="今日のデイリーボーナスを受け取ったか確認します")
+
+@bot.tree.command(name="daily", description="デイリーボーナスの進捗確認")
 async def daily_status(interaction: discord.Interaction):
     rewarded_list = get_rewarded_users()
     if str(interaction.user.id) in rewarded_list:
-        await interaction.response.send_message("今日のデイリーサイファーは【完了】しています！✅", ephemeral=True)
+        await interaction.response.send_message("今日の報酬は獲得済みです！✅", ephemeral=True)
     else:
         current_min = voice_active_minutes.get(str(interaction.user.id), 0)
-        await interaction.response.send_message(f"今日のデイリーサイファーは【未完了】です。現在のマイクON時間: 約{int(current_min)}分 / 30分", ephemeral=True)
+        await interaction.response.send_message(f"現在のマイクON時間: 約{int(current_min)}分 / 30分", ephemeral=True)
 
 @bot.tree.command(name="saifu", description="所持金を確認")
 async def saifu(interaction: discord.Interaction):
-    data = load_data()
-    balance = data.get(str(interaction.user.id), 0)
+    balance = get_user_balance(interaction.user.id)
     await interaction.response.send_message(f"{interaction.user.display_name}さんの所持金: **{balance} SP**")
 
-@bot.tree.command(name="sent", description="SPを送金")
-async def sent(interaction: discord.Interaction, member: discord.Member, amount: int):
-    if amount <= 0: return await interaction.response.send_message("1以上を指定してください。", ephemeral=True)
-    data = load_data()
-    sid, rid = str(interaction.user.id), str(member.id)
-    if data.get(sid, 0) < amount: return await interaction.response.send_message("SP不足です。", ephemeral=True)
-    data[sid] -= amount
-    data[rid] = data.get(rid, 0) + amount
-    save_data(data)
-    await interaction.response.send_message(f"{member.display_name}さんに **{amount} SP** 送金しました！")
-
-@bot.tree.command(name="word-add", description="★追加: ワードバトルの辞書に新しい単語を追加します")
-@app_commands.describe(word="追加したい単語")
-async def word_add(interaction: discord.Interaction, word: str):
-    exists = word_collection.find_one({'word': word})
-    if exists:
-        return await interaction.response.send_message(f"「{word}」は既に辞書に登録されています！", ephemeral=True)
-    
-    word_collection.insert_one({'word': word, 'added_by': str(interaction.user.id)})
-    await interaction.response.send_message(f"辞書に「{word}」を追加しました！🔥")
-
-@bot.tree.command(name="wordbattle", description="★追加: 辞書からランダムに単語を出します")
-@app_commands.describe(
-    count="出す単語の合計数（指定なしなら1個）",
-    interval="何分ごとに次の単語を出すか（分単位）"
-)
-async def word_battle(interaction: discord.Interaction, count: int = 1, interval: int = 0):
-    if count <= 0:
-        return await interaction.response.send_message("数は1以上にしてください。", ephemeral=True)
-
-    total_words = word_collection.count_documents({})
-    if total_words == 0:
-        return await interaction.response.send_message("辞書が空っぽです！ `/word-add` で単語を追加してください。", ephemeral=True)
-
-    actual_count = min(count, total_words)
-    await interaction.response.send_message(f"🎤 ワードバトル開始！ (合計: {actual_count}個 / 間隔: {interval}分 / 登録数: {total_words})")
-    
-    # DBからランダム取得
-    random_words_cursor = word_collection.aggregate([{ "$sample": { "size": actual_count } }])
-    words_list = [doc['word'] for doc in random_words_cursor]
-
-    for i, word in enumerate(words_list):
-        msg = f"**【{i+1}個目】** 👉   **{word}**"
-        await interaction.channel.send(msg)
-        
-        if i < len(words_list) - 1 and interval > 0:
-            await asyncio.sleep(interval * 60)
-
-# --- 8. 起動 ---
+# --- 9. 起動 ---
 if __name__ == "__main__":
     keep_alive()
     bot.run(TOKEN)
