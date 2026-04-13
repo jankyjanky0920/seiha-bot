@@ -273,6 +273,11 @@ async def dislogin(ctx, member: discord.Member):
 
 # --- 8. スラッシュコマンド (一般) ---
 
+@bot.tree.command(name="tester")
+async def tester(interaction: discord.Interaction):
+    saysaysay = "m!p https://youtu.be/9ZujrbUZMAA?si=dbWl7a3qiLIDjJMA"
+    await interaction.response.send_message(saysaysay)
+    
 @bot.tree.command(name="gamerule", description="バトルのBPMとTURNをランダムに決定します")
 async def gamerule(interaction: discord.Interaction):
     # --- BPMの抽選 (ラベル形式に変更) ---
