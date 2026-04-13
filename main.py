@@ -288,7 +288,7 @@ async def get_sp_ranking():
     ranking_data.sort(key=lambda x: x[1], reverse=True)
     if not ranking_data: return "ランキング対象のユーザーがいません。"
 
-    msg = "🏆 **MC限定 SPランキング** 🏆\n"
+    msg = "🏆 **所持SPランキング** 🏆\n"
     for i, (name, sp) in enumerate(ranking_data[:10], 1):
         medal = "🥇" if i == 1 else "🥈" if i == 2 else "🥉" if i == 3 else f"{i}位"
         msg += f"{medal} {name}: **{sp} SP**\n"
