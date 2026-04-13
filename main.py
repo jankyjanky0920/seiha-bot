@@ -273,6 +273,40 @@ async def dislogin(ctx, member: discord.Member):
 
 # --- 8. スラッシュコマンド (一般) ---
 
+@bot.tree.command(name="gamerule", description="バトルのBPMとTURNをランダムに決定します")
+async def gamerule(interaction: discord.Interaction):
+    # --- BPMの抽選 ---
+    bpm_options = ['LOW', 'MIDDLE', 'FAST', 'ACAPPELLA']
+    bpm_weights = [30, 30, 30, 10]  # 30%, 30%, 30%, 10%
+    
+    selected_bpm_type = random.choices(bpm_options, weights=bpm_weights)[0]
+    
+    # BPMの具体的な数値を決定
+    if selected_bpm_type == 'LOW':
+        bpm_val = f"{random.randint(70, 84)}" # ~84
+    elif selected_bpm_type == 'MIDDLE':
+        bpm_val = f"{random.randint(85, 114)}" # 85~114
+    elif selected_bpm_type == 'FAST':
+        bpm_val = f"{random.randint(115, 140)}" # 115~ (上限を140程度に設定)
+    else:
+        bpm_val = "ACAPPELLA"
+
+    # --- TURNの抽選 ---
+    if selected_bpm_type == 'ACAPPELLA':
+        # アカペラの場合は 45s×2 または 60s×2 のどちらか (50:50で抽選)
+        turn_options = ['45s×2', '60s×2']
+        turn_weights = [50, 50]
+    else:
+        # 通常時の確率設定
+        turn_options = ['8×2', '8×3', '8×4', '16×2', '32×2', '45s×2', '60s×2']
+        turn_weights = [16, 18, 18, 18, 6, 12, 12]
+
+    selected_turn = random.choices(turn_options, weights=turn_weights)[0]
+
+    # --- 出力 ---
+    result_message = f"BPM：**{bpm_val}**　TURN：**{selected_turn}**"
+    await interaction.response.send_message(result_message)
+
 @bot.tree.command(name="vote", description="先攻と後攻の投票パネルを作成します")
 @app_commands.describe(first="先攻の名前", second="後攻の名前")
 async def vote(interaction: discord.Interaction, first: str, second: str):
@@ -338,7 +372,9 @@ async def help_command(interaction: discord.Interaction):
             "・`/wordbattle` (count) (interval)\n"
             "ワードバトルのお題を送信します。任意で、(count)個の単語を送信します。また、単語を１つづつ(interval)分ごとに送信します。\n\n"
             "・`/vote` [first] [second]\n"
-            "先攻の[first]、後攻の[second]の投票を全自動で作成します。"
+            "先攻の[first]、後攻の[second]の投票を全自動で作成します。\n\n"
+            "・`/gamerule`\n"
+            "もしバトルのルール決定に困ったとき、テンポとターンを自動でランダムに選択します。"
         ),
         # 3ページ目：管理者用コマンド (1~5個目)
         (
