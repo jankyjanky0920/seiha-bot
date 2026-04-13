@@ -294,7 +294,7 @@ async def gamerule(interaction: discord.Interaction):
     else:
         # 通常時の確率設定
         turn_options = ['8×2', '8×3', '8×4', '16×2', '32×2', '45s×2', '60s×2']
-        turn_weights = [16, 18, 18, 18, 6, 12, 12]
+        turn_weights = [10, 20, 30, 20, 4, 8, 8]
 
     selected_turn = random.choices(turn_options, weights=turn_weights)[0]
 
