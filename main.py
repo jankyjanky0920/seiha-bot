@@ -162,7 +162,10 @@ async def run_cipher_logic(end_datetime):
                         
                         new_balance = get_user_balance(user_id)
                         if dj_booth:
-                            await dj_booth.send(f"{member.mention} さんのデイリーサイファー（30分）を確認！**{bonus} SP** を付与しました。現在の所持金: **{new_balance} SP**")
+                            await dj_booth.send(
+                                f"{member.mention} さんのデイリーサイファー（30分）を確認！**{bonus} SP** を付与しました。現在の所持金: **{new_balance} SP**",
+                                allowed_mentions=discord.AllowedMentions.none()
+                            )
 
     except Exception as e: 
         print(f"Error in run_cipher_logic: {e}")
@@ -198,17 +201,12 @@ async def daily_ranking_task():
 @commands.has_permissions(administrator=True)
 async def manual_bonus(ctx, member: discord.Member):
     """【管理者】指定したユーザーに50~100 SPをランダムに付与"""
-    # 50から100の間でランダムな数値を決定
     amount = random.randint(50, 100)
-    
-    # $incを使用してDBを直接更新
     collection.update_one(
         {'user_id': str(member.id)},
         {'$inc': {'balance': amount}},
         upsert=True
     )
-    
-    # 最新の残高を取得して報告
     doc = collection.find_one({'user_id': str(member.id)})
     new_balance = doc.get('balance', 0)
     
@@ -240,6 +238,27 @@ async def leave_vc(ctx):
 async def add_sp(ctx, member: discord.Member, amount: int):
     add_user_balance(member.id, amount)
     await ctx.send(f"{member.display_name}に **{amount} SP** 付与しました。")
+
+@bot.command(name="word-remove")
+@commands.has_permissions(administrator=True)
+async def word_remove(ctx, word: str):
+    exists = word_collection.find_one({'word': word})
+    if not exists: return await ctx.send(f"「{word}」はありません。")
+    word_collection.delete_one({'word': word})
+    await ctx.send(f"「{word}」を削除しました。")
+
+@bot.command(name="bulk-remove")
+@commands.has_permissions(administrator=True)
+async def bulk_remove(ctx, *, words_str: str):
+    words_to_delete = words_str.split()
+    result = word_collection.delete_many({'word': {'$in': words_to_delete}})
+    await ctx.send(f"{result.deleted_count} 個の単語を削除しました。")
+
+@bot.command(name="dislogin")
+@commands.has_permissions(administrator=True)
+async def dislogin(ctx, member: discord.Member):
+    remove_rewarded_user(member.id)
+    await ctx.send(f"{member.display_name}のデイリー記録を削除しました。")
 
 # --- 8. スラッシュコマンド (一般) ---
 
@@ -282,6 +301,57 @@ async def daily_status(interaction: discord.Interaction):
 async def saifu(interaction: discord.Interaction):
     balance = get_user_balance(interaction.user.id)
     await interaction.response.send_message(f"{interaction.user.display_name}さんの所持金: **{balance} SP**")
+
+@bot.tree.command(name="sent", description="SPを送金")
+async def sent(interaction: discord.Interaction, member: discord.Member, amount: int):
+    if amount <= 0: return await interaction.response.send_message("1以上を指定してください。", ephemeral=True)
+    
+    sender_balance = get_user_balance(interaction.user.id)
+    if sender_balance < amount: 
+        return await interaction.response.send_message("SPが不足しています。", ephemeral=True)
+    
+    # DB直接更新: 送信者から減算し、受信者に加算
+    collection.update_one({'user_id': str(interaction.user.id)}, {'$inc': {'balance': -amount}})
+    collection.update_one({'user_id': str(member.id)}, {'$inc': {'balance': amount}}, upsert=True)
+    
+    await interaction.response.send_message(f"{member.display_name}さんに **{amount} SP** 送金しました！")
+
+@bot.tree.command(name="word-add", description="ワードバトルの辞書に新しい単語を追加します")
+@app_commands.describe(word="追加したい単語")
+async def word_add(interaction: discord.Interaction, word: str):
+    exists = word_collection.find_one({'word': word})
+    if exists:
+        return await interaction.response.send_message(f"「{word}」は既に辞書に登録されています！", ephemeral=True)
+    
+    word_collection.insert_one({'word': word, 'added_by': str(interaction.user.id)})
+    await interaction.response.send_message(f"辞書に「{word}」を追加しました！🔥")
+
+@bot.tree.command(name="wordbattle", description="辞書からランダムに単語を出します")
+@app_commands.describe(
+    count="出す単語の合計数（指定なしなら1個）",
+    interval="何分ごとに次の単語を出すか（分単位）"
+)
+async def word_battle(interaction: discord.Interaction, count: int = 1, interval: int = 0):
+    if count <= 0:
+        return await interaction.response.send_message("数は1以上にしてください。", ephemeral=True)
+
+    total_words = word_collection.count_documents({})
+    if total_words == 0:
+        return await interaction.response.send_message("辞書が空っぽです！ `/word-add` で単語を追加してください。", ephemeral=True)
+
+    actual_count = min(count, total_words)
+    await interaction.response.send_message(f"🎤 ワードバトル開始！ (合計: {actual_count}個 / 間隔: {interval}分 / 登録数: {total_words})")
+    
+    # DBからランダム取得
+    random_words_cursor = word_collection.aggregate([{ "$sample": { "size": actual_count } }])
+    words_list = [doc['word'] for doc in random_words_cursor]
+
+    for i, word in enumerate(words_list):
+        msg = f"**【{i+1}個目】** 👉   **{word}**"
+        await interaction.channel.send(msg)
+        
+        if i < len(words_list) - 1 and interval > 0:
+            await asyncio.sleep(interval * 60)
 
 # --- 9. 起動 ---
 if __name__ == "__main__":
