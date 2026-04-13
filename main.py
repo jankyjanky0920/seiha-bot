@@ -275,25 +275,20 @@ async def dislogin(ctx, member: discord.Member):
 
 @bot.tree.command(name="gamerule", description="バトルのBPMとTURNをランダムに決定します")
 async def gamerule(interaction: discord.Interaction):
-    # --- BPMの抽選 ---
-    bpm_options = ['LOW', 'MIDDLE', 'FAST', 'ACAPPELLA']
+    # --- BPMの抽選 (ラベル形式に変更) ---
+    bpm_options = [
+        'LOW(BPM:~84)', 
+        'MIDDLE(BPM:85~114)', 
+        'FAST(BPM:115~)', 
+        'ACAPPELLA'
+    ]
     bpm_weights = [30, 30, 30, 10]  # 30%, 30%, 30%, 10%
     
-    selected_bpm_type = random.choices(bpm_options, weights=bpm_weights)[0]
-    
-    # BPMの具体的な数値を決定
-    if selected_bpm_type == 'LOW':
-        bpm_val = f"{random.randint(70, 84)}" # ~84
-    elif selected_bpm_type == 'MIDDLE':
-        bpm_val = f"{random.randint(85, 114)}" # 85~114
-    elif selected_bpm_type == 'FAST':
-        bpm_val = f"{random.randint(115, 140)}" # 115~ (上限を140程度に設定)
-    else:
-        bpm_val = "ACAPPELLA"
+    selected_bpm = random.choices(bpm_options, weights=bpm_weights)[0]
 
     # --- TURNの抽選 ---
-    if selected_bpm_type == 'ACAPPELLA':
-        # アカペラの場合は 45s×2 または 60s×2 のどちらか (50:50で抽選)
+    if selected_bpm == 'ACAPPELLA':
+        # アカペラの場合は 45s×2 または 60s×2 のどちらか (50:50)
         turn_options = ['45s×2', '60s×2']
         turn_weights = [50, 50]
     else:
@@ -304,7 +299,7 @@ async def gamerule(interaction: discord.Interaction):
     selected_turn = random.choices(turn_options, weights=turn_weights)[0]
 
     # --- 出力 ---
-    result_message = f"BPM：**{bpm_val}**　TURN：**{selected_turn}**"
+    result_message = f"BPM：**{selected_bpm}**　TURN：**{selected_turn}**"
     await interaction.response.send_message(result_message)
 
 @bot.tree.command(name="vote", description="先攻と後攻の投票パネルを作成します")
