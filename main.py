@@ -82,6 +82,25 @@ def keep_alive():
     t.start()
 
 # --- 5. Botの基本設定 ---
+class HelpPagination(discord.ui.View):
+    def __init__(self, pages):
+        super().__init__(timeout=120)  # 操作がないと2分で無効化
+        self.pages = pages
+        self.current_page = 0
+
+    async def update_message(self, interaction: discord.Interaction):
+        await interaction.response.edit_message(content=self.pages[self.current_page], view=self)
+
+    @discord.ui.button(label="◀ 前のページ", style=discord.ButtonStyle.gray)
+    async def previous_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        self.current_page = (self.current_page - 1) % len(self.pages)
+        await self.update_message(interaction)
+
+    @discord.ui.button(label="次のページ ▶", style=discord.ButtonStyle.blurple)
+    async def next_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        self.current_page = (self.current_page + 1) % len(self.pages)
+        await self.update_message(interaction)
+        
 intents = discord.Intents.all()
 class MyBot(commands.Bot):
     def __init__(self):
@@ -239,14 +258,6 @@ async def add_sp(ctx, member: discord.Member, amount: int):
     add_user_balance(member.id, amount)
     await ctx.send(f"{member.display_name}に **{amount} SP** 付与しました。")
 
-@bot.command(name="word-remove")
-@commands.has_permissions(administrator=True)
-async def word_remove(ctx, word: str):
-    exists = word_collection.find_one({'word': word})
-    if not exists: return await ctx.send(f"「{word}」はありません。")
-    word_collection.delete_one({'word': word})
-    await ctx.send(f"「{word}」を削除しました。")
-
 @bot.command(name="bulk-remove")
 @commands.has_permissions(administrator=True)
 async def bulk_remove(ctx, *, words_str: str):
@@ -283,6 +294,53 @@ async def get_sp_ranking():
         msg += f"{medal} {name}: **{sp} SP**\n"
     return msg
 
+@bot.tree.command(name="help", description="コマンドの一覧をページごとに表示します")
+async def help_command(interaction: discord.Interaction):
+    # 原文を「5コマンドずつ」かつ「一般と管理者を分ける」ルールで分割
+    pages = [
+        # 1ページ目：一般コマンド (1~5個目)
+        (
+            "・`/daily`\n"
+            "今日のデイリーサイファーの進捗状況を確認できます\n\n"
+            "・`/ranking`\n"
+            "所持SPのランキングを表示します。\n\n"
+            "・`/saifu`\n"
+            "自身の所持SPを確認できます。\n\n"
+            "・`/sent` [member] [amount]\n"
+            "自身の所持SPから、[member]に[amount]SPを送金できます\n\n"
+            "・`/word-add` [word]\n"
+            "ワードバトルに使用できる言葉に[word]を追加します。（ワードバトルは固有名詞に弱いので、積極的に追加していってください。）"
+        ),
+        # 2ページ目：一般コマンド (残り)
+        (
+            "・`/wordbattle` (count) (interval)\n"
+            "ワードバトルのお題を送信します。任意で、(count)個の単語を送信します。また、単語を１つづつ(interval)分ごとに送信します。"
+        ),
+        # 3ページ目：管理者用コマンド (1~5個目)
+        (
+            "`ここからは管理者用コマンドです。`\n"
+            "・`-bonus`\n"
+            "指定したユーザーに50~100 SPをランダムに付与\n\n"
+            "・`-join`\n"
+            "声覇マネジメントがバトル・サイファーに入ります。\n\n"
+            "・`-leave`\n"
+            "声覇マネジメントがバトル・サイファーから抜けます。\n\n"
+            "・`-add` [member] [amount]\n"
+            "[member]の所持SPを[amount]増やします。[amount]にマイナスを指定すれば没収できます。\n\n"
+            "・`-bulk-remove` [word1] [word2] [word3]...\n"
+            "指定した[word]すべてをワードバトルから削除します。"
+        ),
+        # 4ページ目：管理者用コマンド (残り)
+        (
+            "`ここからは管理者用コマンドです。`（続き）\n"
+            "・`-dislogin` [member]\n"
+            "[member]のログイン記録を削除します。"
+        )
+    ]
+
+    view = HelpPagination(pages)
+    # ephemeral=True により、実行した本人以外には見えません
+    await interaction.response.send_message(pages[0], view=view, ephemeral=True)
 @bot.tree.command(name="ranking", description="SPランキングを表示")
 async def ranking(interaction: discord.Interaction):
     ranking_msg = await get_sp_ranking()
