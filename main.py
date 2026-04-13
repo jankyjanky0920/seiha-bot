@@ -273,6 +273,28 @@ async def dislogin(ctx, member: discord.Member):
 
 # --- 8. スラッシュコマンド (一般) ---
 
+@bot.tree.command(name="vote", description="先攻と後攻の投票パネルを作成します")
+@app_commands.describe(first="先攻の名前", second="後攻の名前")
+async def vote(interaction: discord.Interaction, first: str, second: str):
+    # 投票用メッセージの組み立て
+    content = (
+        f":a: 先攻：{first}\n"
+        f":regional_indicator_b: 後攻：{second}"
+    )
+    
+    # メッセージを送信
+    await interaction.response.send_message(content)
+    
+    # 送信したメッセージ（InteractionResponse）を取得してリアクションを追加
+    message = await interaction.original_response()
+    
+    # 順次リアクションを付与
+    try:
+        await message.add_reaction("🅰️")
+        await message.add_reaction("🇧")
+    except Exception as e:
+        print(f"リアクションの付与に失敗しました: {e}")
+
 async def get_sp_ranking():
     guild = bot.get_guild(ALLOWED_GUILD_ID)
     if not guild: return "サーバーが見つかりません。"
@@ -314,7 +336,9 @@ async def help_command(interaction: discord.Interaction):
         # 2ページ目：一般コマンド (残り)
         (
             "・`/wordbattle` (count) (interval)\n"
-            "ワードバトルのお題を送信します。任意で、(count)個の単語を送信します。また、単語を１つづつ(interval)分ごとに送信します。"
+            "ワードバトルのお題を送信します。任意で、(count)個の単語を送信します。また、単語を１つづつ(interval)分ごとに送信します。\n\n"
+            "・`/vote` [first] [second]\n"
+            "先攻の[first]、後攻の[second]の投票を全自動で作成します。"
         ),
         # 3ページ目：管理者用コマンド (1~5個目)
         (
