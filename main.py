@@ -39,6 +39,17 @@ RANKING_TIME = datetime.time(hour=22, minute=0, tzinfo=JST)
 voice_active_minutes = {}
 
 # --- 3. データベース用関数 ---
+def get_playlist_urls(url):
+    ydl_opts = {
+        'flat_playlist': True,
+        'extract_flat': True,
+    }
+    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+        info = ydl.extract_info(url, download=False)
+        if 'entries' in info:
+            return [f"https://www.youtube.com/watch?v={entry['url']}" for entry in info['entries']]
+    return []
+
 def get_user_balance(user_id):
     doc = collection.find_one({'user_id': str(user_id)})
     return doc['balance'] if doc else 0
