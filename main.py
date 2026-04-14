@@ -273,6 +273,28 @@ async def dislogin(ctx, member: discord.Member):
     remove_rewarded_user(member.id)
     await ctx.send(f"{member.display_name}のデイリー記録を削除しました。")
 
+@bot.command(name="readingbeat")
+@commands.has_permissions(administrator=True) # 管理者権限を持つ人だけ実行可能
+async def readingbeat(ctx):
+    global cached_beats
+    
+    # 状況を知らせるメッセージ
+    status_msg = await ctx.send("🔄 YouTube再生リストを読み込み中... しばらくお待ちください。")
+    
+    try:
+        # 非同期でリストを再取得
+        new_beats = await asyncio.to_thread(get_playlist_urls, PLAYLIST_URL)
+        
+        if new_beats:
+            cached_beats = new_beats
+            await status_msg.edit(content=f"✅ リロード完了！ {len(cached_beats)}件のビートを読み込みました。")
+        else:
+            await status_msg.edit(content="⚠️ リストが空、または取得に失敗しました。URLを確認してください。")
+            
+    except Exception as e:
+        print(f"Reload Error: {e}")
+        await status_msg.edit(content="❌ エラーが発生しました。ログを確認してください。")
+        
 # --- 8. スラッシュコマンド (一般) ---
 cached_beats = []
 
