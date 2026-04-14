@@ -274,40 +274,31 @@ async def dislogin(ctx, member: discord.Member):
     await ctx.send(f"{member.display_name}のデイリー記録を削除しました。")
 
 # --- 8. スラッシュコマンド (一般) ---
+cached_beats = []
 
-def get_playlist_urls(url):
-    ydl_opts = {
-        'flat_playlist': True,  # 動画の中身をダウンロードせず、情報だけ取得する
-        'extract_flat': True,
-    }
-    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-        info = ydl.extract_info(url, download=False)
-        if 'entries' in info:
-            # 動画のURLをリストにして返す
-            return [f"https://www.youtube.com/watch?v={entry['url']}" for entry in info['entries']]
-    return []
+# --- 起動時の処理 ---
+@bot.event
+async def on_ready():
+    global cached_beats
+    print(f'Logged in as {bot.user}')
+    
+    # 起動時に一度だけビートを取得
+    print("ビートリストを読み込み中...")
+    cached_beats = await asyncio.to_thread(get_playlist_urls, PLAYLIST_URL)
+    print(f"{len(cached_beats)}件のビートを読み込みました！")
+    
+    # コマンドの同期
+    await bot.tree.sync()
 
-# --- スラッシュコマンド ---
+# --- コマンドはこれだけで済む ---
 @bot.tree.command(name="beat", description="再生リストからランダムにビートを選択します")
 async def beat(interaction: discord.Interaction):
-    # 応答に時間がかかる場合があるため、一旦「考え中」の状態にします
-    await interaction.response.defer()
-
-    try:
-        urls = get_playlist_urls(PLAYLIST_URL)
-        if not urls:
-            await interaction.followup.send("再生リストが空か、取得に失敗しました。")
-            return
-
-        # ランダムに1つ選択
-        selected_url = random.choice(urls)
-        
-        # 結果を送信
-        await interaction.followup.send(f"🎧 今日のビートはこれだ！\n{selected_url}")
-
-    except Exception as e:
-        await interaction.followup.send(f"エラーが発生しました: {e}")
-
+    if not cached_beats:
+        await interaction.response.send_message("ビートリストがまだ読み込まれていないか、空です。", ephemeral=True)
+        return
+    
+    selected_url = random.choice(cached_beats)
+    await interaction.response.send_message(f"🎧 今日のビートはこれだ！\n{selected_url}")
 @bot.tree.command(name="gamerule", description="バトルのBPMとTURNをランダムに決定します")
 async def gamerule(interaction: discord.Interaction):
     # --- BPMの抽選 (ラベル形式に変更) ---
