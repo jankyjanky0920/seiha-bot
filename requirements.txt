@@ -4,3 +4,4 @@ flask
 pymongo[srv]
 PyNaCl
 davey
+yt-dlp
