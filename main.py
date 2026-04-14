@@ -9,6 +9,7 @@ import pymongo
 import datetime
 import random
 import asyncio
+import yt_dlp
 
 # --- 1. 環境変数の読み込みとDB設定 ---
 load_dotenv()
@@ -21,6 +22,7 @@ collection = db['user_balance']
 daily_collection = db['daily_status']
 word_collection = db['word_dictionary']
 
+PLAYLIST_URL = "https://youtube.com/playlist?list=PL1vnrKZzRuE6pKv-aVWdjs7p0UPu0Hulz&si=dZWYzD6Ji9TpAo3O"
 MC_ROLE_ID = 1480235861244383262
 ALLOWED_GUILD_ID = 1480208337533534379
 ANNOUNCE_CHANNEL_ID = 1492856858078220542
@@ -273,6 +275,39 @@ async def dislogin(ctx, member: discord.Member):
 
 # --- 8. スラッシュコマンド (一般) ---
 
+def get_playlist_urls(url):
+    ydl_opts = {
+        'flat_playlist': True,  # 動画の中身をダウンロードせず、情報だけ取得する
+        'extract_flat': True,
+    }
+    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+        info = ydl.extract_info(url, download=False)
+        if 'entries' in info:
+            # 動画のURLをリストにして返す
+            return [f"https://www.youtube.com/watch?v={entry['url']}" for entry in info['entries']]
+    return []
+
+# --- スラッシュコマンド ---
+@bot.tree.command(name="beat", description="再生リストからランダムにビートを選択します")
+async def beat(interaction: discord.Interaction):
+    # 応答に時間がかかる場合があるため、一旦「考え中」の状態にします
+    await interaction.response.defer()
+
+    try:
+        urls = get_playlist_urls(PLAYLIST_URL)
+        if not urls:
+            await interaction.followup.send("再生リストが空か、取得に失敗しました。")
+            return
+
+        # ランダムに1つ選択
+        selected_url = random.choice(urls)
+        
+        # 結果を送信
+        await interaction.followup.send(f"🎧 今日のビートはこれだ！\n{selected_url}")
+
+    except Exception as e:
+        await interaction.followup.send(f"エラーが発生しました: {e}")
+
 @bot.tree.command(name="gamerule", description="バトルのBPMとTURNをランダムに決定します")
 async def gamerule(interaction: discord.Interaction):
     # --- BPMの抽選 (ラベル形式に変更) ---
@@ -369,7 +404,7 @@ async def help_command(interaction: discord.Interaction):
             "・`/vote` [first] [second]\n"
             "先攻の[first]、後攻の[second]の投票を全自動で作成します。\n\n"
             "・`/gamerule`\n"
-            "もしバトルのルール決定に困ったとき、テンポとターンを自動でランダムに選択します。"
+            "バトルの、テンポとターンを自動でランダムに選択します。"
         ),
         # 3ページ目：管理者用コマンド (1~5個目)
         (
