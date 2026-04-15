@@ -338,7 +338,7 @@ async def beat(interaction: discord.Interaction):
         return
     
     selected_url = random.choice(cached_beats)
-    await interaction.response.send_message(f"🎧 今日のビートはこれだ！\n{selected_url}")
+    await interaction.response.send_message(f"m!p {selected_url}")
 @bot.tree.command(name="gamerule", description="バトルのBPMとTURNをランダムに決定します")
 async def gamerule(interaction: discord.Interaction):
     # --- BPMの抽選 (ラベル形式に変更) ---
