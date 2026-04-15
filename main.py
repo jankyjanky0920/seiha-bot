@@ -115,12 +115,19 @@ class HelpPagination(discord.ui.View):
         await self.update_message(interaction)
         
 intents = discord.Intents.all()
+
 class MyBot(commands.Bot):
     def __init__(self):
         super().__init__(command_prefix="-", intents=intents)
 
     async def setup_hook(self):
         guild = discord.Object(id=ALLOWED_GUILD_ID)
+        
+        # --- 追加：過去のグローバル登録（全体用）を一旦クリアして同期 ---
+        self.tree.clear_commands(guild=None)
+        await self.tree.sync(guild=None)
+        
+        # --- 既存：このサーバー専用として改めて登録 ---
         self.tree.copy_global_to(guild=guild)
         await self.tree.sync(guild=guild) 
         
