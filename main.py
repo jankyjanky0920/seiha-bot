@@ -47,7 +47,7 @@ def get_playlist_urls(url):
     with yt_dlp.YoutubeDL(ydl_opts) as ydl:
         info = ydl.extract_info(url, download=False)
         if 'entries' in info:
-            return [f"https://www.youtube.com/watch?v={entry['url']}" for entry in info['entries']]
+        return [entry['url'] for entry in info['entries']]
     return []
 
 def get_user_balance(user_id):
