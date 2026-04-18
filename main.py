@@ -31,11 +31,9 @@ DJ_BOOTH_CHANNEL_ID = 1492856858078220542
 
 # --- 2. 時間設定 ---
 JST = datetime.timezone(datetime.timedelta(hours=9))
-# 20:50に自動開始
 START_TIME = datetime.time(hour=20, minute=50, tzinfo=JST) 
 RANKING_TIME = datetime.time(hour=22, minute=0, tzinfo=JST)
 
-# 監視用変数
 voice_active_minutes = {}
 
 # --- 3. データベース・便利関数 ---
@@ -47,6 +45,7 @@ def get_playlist_urls(url):
     with yt_dlp.YoutubeDL(ydl_opts) as ydl:
         info = ydl.extract_info(url, download=False)
         if 'entries' in info:
+            # 修正：二重URL防止のため、取得したURLをそのまま返します
             return [entry['url'] for entry in info['entries']]
     return []
 
@@ -121,15 +120,8 @@ class MyBot(commands.Bot):
         super().__init__(command_prefix="-", intents=intents)
 
     async def setup_hook(self):
-        guild = discord.Object(id=ALLOWED_GUILD_ID)
-        
-        # 修正版：①先にコピーする ②後からグローバルを消す ③両方同期する
-        self.tree.copy_global_to(guild=guild)
-        self.tree.clear_commands(guild=None)
-        
-        await self.tree.sync(guild=guild) 
-        await self.tree.sync(guild=None)
-        
+        # 修正：アクセス制限対策のため、自動同期を廃止しました。
+        # コマンドの更新が必要な場合は、ボット起動後に管理者権限で `-sync` と打ってください。
         daily_cipher_task.start() 
         daily_ranking_task.start()
 
@@ -242,6 +234,18 @@ async def daily_ranking_task():
         await channel.send(ranking_msg, allowed_mentions=discord.AllowedMentions.none())
 
 # --- 9. 管理者用コマンド (プレフィックス) ---
+@bot.command(name="sync")
+@commands.has_permissions(administrator=True)
+async def sync_commands(ctx):
+    """【管理者専用】スラッシュコマンドをDiscord側に強制同期します"""
+    guild = discord.Object(id=ALLOWED_GUILD_ID)
+    bot.tree.copy_global_to(guild=guild)
+    bot.tree.clear_commands(guild=None) # グローバルの重複を避けるためのクリーニング
+    
+    await bot.tree.sync(guild=guild)
+    await bot.tree.sync(guild=None)
+    await ctx.send("✅ コマンドの同期が完了しました！反映まで数分かかる場合があります。")
+
 @bot.command(name="bonus")
 @commands.has_permissions(administrator=True)
 async def manual_bonus(ctx, member: discord.Member):
@@ -360,7 +364,7 @@ async def help_command(interaction: discord.Interaction):
             "・`/ranking`\n所持SPのランキングを表示します。\n\n"
             "・`/saifu`\n自身の所持SPを確認できます。\n\n"
             "・`/sent` [member] [amount]\n自身の所持SPから、[member]に[amount]SPを送金できます\n\n"
-            "・`/word-add` [word]\nワードバトルに使用できる言葉に[word]を追加します。（固有名詞に弱いので積極的に追加していってください。）"
+            "・`/word-add` [word]\nワードバトルに使用できる言葉に[word]を追加します。"
         ),
         (
             "・`/wordbattle` (count) (interval)\nワードバトルのお題を送信します。\n\n"
@@ -369,16 +373,17 @@ async def help_command(interaction: discord.Interaction):
             "・`/beat`\n再生リストからランダムにビートを選択します。"
         ),
         (
-            "`ここからは管理者用コマンドです。`\n"
-            "・`-bonus` [member]\n指定したユーザーに50~100 SPをランダムに付与\n\n"
+            "`ここからは管理者用コマンドです。`（接頭辞 - ）\n"
+            "・`-sync` \nスラッシュコマンドをDiscordに反映させます（重要）\n\n"
+            "・`-bonus` [member]\n指定したユーザーにランダムSPを付与\n\n"
             "・`-join` / `-leave`\nボットの入退室\n\n"
-            "・`-add` [member] [amount]\n所持SPを増減します（マイナスも可）。\n\n"
-            "・`-bulk-remove` [words...]\n指定した単語をワードバトルから削除します。"
+            "・`-add` [member] [amount]\n所持SPを増減します。"
         ),
         (
             "`ここからは管理者用コマンドです。`（続き）\n"
+            "・`-bulk-remove` [words...]\n単語を削除します。\n\n"
             "・`-dislogin` [member]\nログイン記録を削除します。\n\n"
-            "・`-readingbeat`\nYouTube再生リストをリロードします。"
+            "・`-readingbeat`\n再生リストをリロードします。"
         )
     ]
     view = HelpPagination(pages)
