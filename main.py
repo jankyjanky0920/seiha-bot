@@ -451,7 +451,7 @@ async def task_done(ctx, *, args: str):
 
     target_mentions = " ".join([f"<@{uid}>" for uid in target_ids])
     reward_text = f"\n💰 **{reward} SP** の報酬が付与されました！" if reward > 0 else ""
-    msg = f"✅ **タスク完了**\n{target_mentions} さん、タスク `{task_name}` 完了お疲れ様でした！{reward_text}"
+    msg = f"✅ **タスク完了**\n{target_mentions} さん、タスク `{task_name}` 完了を確認しました{reward_text}"
 
     if is_active_time:
         await notify_channel.send(msg)
@@ -566,38 +566,18 @@ async def vote(interaction: discord.Interaction, first: str, second: str):
     except Exception as e:
         print(f"リアクションの付与に失敗しました: {e}")
 
-@bot.tree.command(name="help", description="コマンドの一覧をページごとに表示します")
+@bot.tree.command(name="help", description="説明書（マニュアル）のリンクを表示します")
 async def help_command(interaction: discord.Interaction):
-    pages = [
-        (
-            "・`/daily`\n今日のデイリーサイファーの進捗状況を確認できます\n\n"
-            "・`/ranking`\n所持SPのランキングを表示します。\n\n"
-            "・`/saifu`\n自身の所持SPを確認できます。\n\n"
-            "・`/sent` [member] [amount]\n自身の所持SPから、[member]に[amount]SPを送金できます\n\n"
-            "・`/word-add` [word]\nワードバトルに使用できる言葉に[word]を追加します。"
-        ),
-        (
-            "・`/wordbattle` (count) (interval)\nワードバトルのお題を送信します。\n\n"
-            "・`/vote` [first] [second]\n先攻後攻の投票を全自動で作成します。\n\n"
-            "・`/gamerule`\nバトルのテンポとターンを自動でランダムに選択します。\n\n"
-            "・`/beat`\n再生リストからランダムにビートを選択します。"
-        ),
-        (
-            "`ここからは管理者用コマンドです。`（接頭辞 - ）\n"
-            "・`-sync` \nスラッシュコマンドをDiscordに反映させます（重要）\n\n"
-            "・`-bonus` [member]\n指定したユーザーにランダムSPを付与\n\n"
-            "・`-join` / `-leave`\nボットの入退室\n\n"
-            "・`-add` [member] [amount]\n所持SPを増減します。"
-        ),
-        (
-            "`ここからは管理者用コマンドです。`（続き）\n"
-            "・`-bulk-remove` [words...]\n単語を削除します。\n\n"
-            "・`-dislogin` [member]\nログイン記録を削除します。\n\n"
-            "・`-readingbeat`\n再生リストをリロードします。"
-        )
-    ]
-    view = HelpPagination(pages)
-    await interaction.response.send_message(pages[0], view=view, ephemeral=True)
+    # 送信するメッセージの内容
+    # ## で見出しにしています
+    message = (
+        "## 声覇マネジメントの手引き\n\n"
+        "Botの機能やコマンドの使い方は、以下のマニュアルをご確認ください。：\n"
+        "🔗 **[noteを開く](https://note.com/preview/nfbf42a5fb2b3?prev_access_key=941730f8a7759e7dcd7daf2822f4faa8)**"
+    )
+    
+    # ephemeral=True にすることで、コマンドを打った本人にしか見えないようになります
+    await interaction.response.send_message(message, ephemeral=True)
 
 @bot.tree.command(name="ranking", description="SPランキングを表示")
 async def ranking(interaction: discord.Interaction):
@@ -629,7 +609,7 @@ async def sent(interaction: discord.Interaction, member: discord.Member, amount:
     collection.update_one({'user_id': str(member.id)}, {'$inc': {'balance': amount}}, upsert=True)
     await interaction.response.send_message(f"{member.display_name}さんに **{amount} SP** 送金しました！")
 
-@bot.tree.command(name="word-add", description="ワードバトルの辞書に新しい単語を追加します")
+@bot.tree.command(name="add_word", description="ワードバトルの辞書に新しい単語を追加します")
 @app_commands.describe(word="追加したい単語")
 async def word_add(interaction: discord.Interaction, word: str):
     exists = word_collection.find_one({'word': word})
@@ -661,7 +641,7 @@ async def my_task(interaction: discord.Interaction):
     tasks = list(task_collection.find({"assignees": user_id}))
 
     if not tasks:
-        return await interaction.response.send_message("🎉 現在抱えているタスクはありません！", ephemeral=True)
+        return await interaction.response.send_message("現在抱えているタスクはありません", ephemeral=True)
 
     embed = discord.Embed(title=f"📋 {interaction.user.display_name} さんのタスク", color=discord.Color.green())
     for t in tasks:
