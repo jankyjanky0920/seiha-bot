@@ -29,10 +29,15 @@ ANNOUNCE_CHANNEL_ID = 1492856858078220542
 CIPHER_VC_ID = 1480212977650110828
 DJ_BOOTH_CHANNEL_ID = 1492856858078220542
 
+task_collection = db['tasks']
+notice_collection = db['pending_notices']
+import re
+
 # --- 2. 時間設定 ---
 JST = datetime.timezone(datetime.timedelta(hours=9))
 START_TIME = datetime.time(hour=20, minute=50, tzinfo=JST) 
 RANKING_TIME = datetime.time(hour=22, minute=0, tzinfo=JST)
+NOTICE_TIME = datetime.time(hour=9, minute=0, tzinfo=JST)
 
 voice_active_minutes = {}
 
@@ -79,6 +84,17 @@ def remove_rewarded_user(user_id):
         {'date': today},
         {'$pull': {'users': str(user_id)}}
     )
+
+def get_target_user_ids(ctx):
+    user_ids = set()
+    # ユーザーメンションからの抽出
+    for user in ctx.message.mentions:
+        user_ids.add(user.id)
+    # ロールメンションからの抽出（ロール所持者全員を追加）
+    for role in ctx.message.role_mentions:
+        for member in role.members:
+            user_ids.add(member.id)
+    return list(user_ids)
 
 # --- 4. Webサーバー (Render/Keep-alive用) ---
 app = Flask('')
@@ -233,6 +249,22 @@ async def daily_ranking_task():
         ranking_msg = await get_sp_ranking()
         await channel.send(ranking_msg, allowed_mentions=discord.AllowedMentions.none())
 
+@tasks.loop(time=NOTICE_TIME)
+async def send_pending_notices_task():
+    await bot.wait_until_ready()
+    pending = list(notice_collection.find())
+    if not pending: return
+
+    for doc in pending:
+        channel = bot.get_channel(doc['channel_id'])
+        if channel:
+            try:
+                await channel.send(doc['message'])
+            except Exception as e:
+                print(f"遅延通知送信エラー: {e}")
+        # 送信が完了したものは削除
+        notice_collection.delete_one({"_id": doc["_id"]})
+
 # --- 9. 管理者用コマンド (プレフィックス) ---
 @bot.command(name="sync")
 @commands.has_permissions(administrator=True)
@@ -307,6 +339,184 @@ async def readingbeat(ctx):
     except Exception as e:
         print(f"Reload Error: {e}")
         await status_msg.edit(content="❌ エラーが発生しました。ログを確認してください。")
+
+@bot.group(name="task", invoke_without_command=True)
+@commands.has_permissions(administrator=True)
+async def task_group(ctx):
+    await ctx.send("サブコマンドを指定してください: `add`, `edit`, `delete`, `done`, `notice`, `list`")
+
+@task_group.command(name="add")
+async def task_add(ctx, *, args: str):
+    """-task add [タスク名] [対象メンション] [期限(任意)] [説明(任意)]"""
+    target_ids = get_target_user_ids(ctx)
+    if not target_ids:
+        return await ctx.send("エラー: 対象（ユーザーまたはロール）をメンションで指定してください。")
+
+    tokens = args.split()
+    task_name, deadline, description_tokens = None, None, []
+
+    # メンションなどを除外して引数を解析
+    for t in tokens:
+        if re.match(r'^<@!?\d+>$|^<@&\d+>$|^<#\d+>$', t):
+            continue
+        elif not task_name:
+            task_name = t
+        elif re.match(r'^\d{1,2}/\d{1,2}$|^\d{1,2}-\d{1,2}$', t) and not deadline:
+            deadline = t # MM/DD または MM-DD 形式なら期限として認識
+        else:
+            description_tokens.append(t)
+
+    if not task_name: return await ctx.send("タスク名を指定してください。（空白を含まない名前にしてください）")
+    description = " ".join(description_tokens)
+
+    # 既に同じタスク名があればユーザー・説明・期限を更新（追加）、なければ新規作成
+    doc = task_collection.find_one({"task_name": task_name})
+    if doc:
+        task_collection.update_one({"task_name": task_name}, {"$addToSet": {"assignees": {"$each": [str(uid) for uid in target_ids]}}})
+        updates = {}
+        if description: updates["description"] = description
+        if deadline: updates["deadline"] = deadline
+        if updates: task_collection.update_one({"task_name": task_name}, {"$set": updates})
+    else:
+        task_collection.insert_one({
+            "task_name": task_name,
+            "description": description,
+            "deadline": deadline,
+            "assignees": [str(uid) for uid in target_ids]
+        })
+    
+    dl_text = f" (期限: {deadline})" if deadline else ""
+    await ctx.send(f"タスク `{task_name}`{dl_text} を追加/更新しました！ 対象: {len(target_ids)}人")
+
+@task_group.command(name="edit")
+async def task_edit(ctx, task_name: str, *, new_desc: str):
+    """-task edit [タスク名] [新しい説明]"""
+    result = task_collection.update_one({"task_name": task_name}, {"$set": {"description": new_desc}})
+    if result.matched_count:
+        await ctx.send(f"タスク `{task_name}` の説明を更新しました。")
+    else:
+        await ctx.send(f"タスク `{task_name}` が見つかりません。")
+
+@task_group.command(name="delete")
+async def task_delete(ctx, *, args: str):
+    """-task delete [タスク名/対象メンション] 両方指定で特定外し"""
+    target_ids = get_target_user_ids(ctx)
+    text_tokens = [t for t in args.split() if not re.match(r'^<@!?\d+>$|^<@&\d+>$|^<#\d+>$', t)]
+    task_name = text_tokens[0] if text_tokens else None
+
+    if task_name and target_ids:
+        # 特定の対象の特定のタスクを削除 (removeの挙動)
+        task_collection.update_one({"task_name": task_name}, {"$pull": {"assignees": {"$in": [str(uid) for uid in target_ids]}}})
+        await ctx.send(f"指定されたユーザーからタスク `{task_name}` を外しました。")
+    elif task_name and not target_ids:
+        # そのタスク自体を全員から削除
+        task_collection.delete_one({"task_name": task_name})
+        await ctx.send(f"タスク `{task_name}` を完全に削除しました。")
+    elif not task_name and target_ids:
+        # 対象の所持しているすべてのタスクを削除
+        task_collection.update_many({}, {"$pull": {"assignees": {"$in": [str(uid) for uid in target_ids]}}})
+        await ctx.send(f"指定されたユーザーが抱えているすべてのタスクを削除しました。")
+    else:
+        return await ctx.send("タスク名か対象メンションの少なくとも一方を指定してください。")
+
+    # 対象者が0人になったタスクは自動的にデータベースから削除（お掃除）
+    task_collection.delete_many({"assignees": {"$size": 0}})
+
+@task_group.command(name="done")
+async def task_done(ctx, *, args: str):
+    """-task done [タスク名] [対象] [報酬額(任意)] [#通知チャンネル(任意)]"""
+    target_ids = get_target_user_ids(ctx)
+    channel_mentions = ctx.message.channel_mentions
+    notify_channel = channel_mentions[0] if channel_mentions else ctx.channel
+
+    text_tokens = [t for t in args.split() if not re.match(r'^<@!?\d+>$|^<@&\d+>$|^<#\d+>$', t)]
+    if not text_tokens: return await ctx.send("タスク名を指定してください。")
+
+    task_name = text_tokens.pop(0)
+    reward = next((int(t) for t in text_tokens if t.isdigit()), 0) # 数字があれば報酬として扱う
+
+    if not target_ids: return await ctx.send("対象をメンションで指定してください。")
+
+    # 1. タスクの削除とお掃除
+    task_collection.update_one({"task_name": task_name}, {"$pull": {"assignees": {"$in": [str(uid) for uid in target_ids]}}})
+    task_collection.delete_many({"assignees": {"$size": 0}}) 
+
+    # 2. 報酬の付与
+    if reward > 0:
+        for uid in target_ids: add_user_balance(uid, reward)
+
+    # 3. 解決の連絡 (時間の制御)
+    now = datetime.datetime.now(JST)
+    is_active_time = 8 <= now.hour < 22
+
+    target_mentions = " ".join([f"<@{uid}>" for uid in target_ids])
+    reward_text = f"\n💰 **{reward} SP** の報酬が付与されました！" if reward > 0 else ""
+    msg = f"✅ **タスク完了**\n{target_mentions} さん、タスク `{task_name}` 完了お疲れ様でした！{reward_text}"
+
+    if is_active_time:
+        await notify_channel.send(msg)
+        await ctx.send(f"タスク完了処理を実施し、{notify_channel.mention} へ通知しました。")
+    else:
+        notice_collection.insert_one({"channel_id": notify_channel.id, "message": msg})
+        await ctx.send(f"タスク完了処理を実施しました。時間外のため、明日の朝9時に {notify_channel.mention} へ通知します。")
+
+@task_group.command(name="notice")
+async def task_notice(ctx, *, args: str=""):
+    """-task notice [タスク名/対象] [#通知チャンネル(任意)]"""
+    target_ids = get_target_user_ids(ctx)
+    channel_mentions = ctx.message.channel_mentions
+    notify_channel = channel_mentions[0] if channel_mentions else ctx.channel
+
+    text_tokens = [t for t in args.split() if not re.match(r'^<@!?\d+>$|^<@&\d+>$|^<#\d+>$', t)]
+    task_name = text_tokens[0] if text_tokens else None
+    messages = []
+
+    if task_name:
+        task = task_collection.find_one({"task_name": task_name})
+        if task and task['assignees']:
+            mentions = " ".join([f"<@{uid}>" for uid in task['assignees']])
+            dl = f" (期限: {task['deadline']})" if task.get('deadline') else ""
+            messages.append(f"🔔 **リマインド**: `{task_name}`{dl}\n{mentions}\n> {task.get('description', '')}")
+    elif target_ids:
+        for uid in target_ids:
+            tasks = list(task_collection.find({"assignees": str(uid)}))
+            if tasks:
+                task_lines = [f"・`{t['task_name']}`" + (f"(期限:{t['deadline']})" if t.get('deadline') else "") for t in tasks]
+                messages.append(f"🔔 <@{uid}> さんの抱えているタスク:\n" + "\n".join(task_lines))
+
+    if not messages: return await ctx.send("通知する対象やタスクが見つかりませんでした。")
+    for m in messages: await notify_channel.send(m)
+    await ctx.send(f"{notify_channel.mention} に通知を送信しました。")
+
+@task_group.command(name="list")
+async def task_list(ctx, *, args: str=""):
+    """-task list [タスク名/対象]"""
+    target_ids = get_target_user_ids(ctx)
+    text_tokens = [t for t in args.split() if not re.match(r'^<@!?\d+>$|^<@&\d+>$|^<#\d+>$', t)]
+    task_name = text_tokens[0] if text_tokens else None
+
+    embed = discord.Embed(title="📋 タスク一覧", color=discord.Color.blue())
+
+    if task_name:
+        task = task_collection.find_one({"task_name": task_name})
+        if not task: return await ctx.send("タスクが見つかりません。")
+        mentions = " ".join([f"<@{uid}>" for uid in task['assignees']])
+        dl = f" (期限: {task['deadline']})" if task.get('deadline') else ""
+        embed.add_field(name=f"{task['task_name']}{dl}", value=f"担当: {mentions}\n説明: {task.get('description', 'なし')}")
+    elif target_ids:
+        uid = str(target_ids[0])
+        tasks = list(task_collection.find({"assignees": uid}))
+        if not tasks: return await ctx.send("対象者はタスクを持っていません。")
+        val = "".join([f"・**{t['task_name']}**" + (f" (期限:{t['deadline']})" if t.get('deadline') else "") + "\n" for t in tasks])
+        embed.add_field(name=f"<@{uid}> さんのタスク", value=val)
+    else:
+        tasks = list(task_collection.find())
+        if not tasks: return await ctx.send("現在登録されているタスクはありません。")
+        for t in tasks:
+            dl = f" [期限:{t['deadline']}]" if t.get('deadline') else ""
+            embed.add_field(name=f"{t['task_name']}{dl}", value=f"担当者: {len(t['assignees'])}人", inline=False)
+
+    await ctx.send(embed=embed)
 
 # --- 10. スラッシュコマンド (一般) ---
 cached_beats = []
@@ -444,6 +654,24 @@ async def word_battle(interaction: discord.Interaction, count: int = 1, interval
         await interaction.channel.send(f"**【{i+1}個目】** 👉   **{word}**")
         if i < len(words_list) - 1 and interval > 0:
             await asyncio.sleep(interval * 60)
+
+@bot.tree.command(name="my_task", description="自分に与えられたタスクを確認します")
+async def my_task(interaction: discord.Interaction):
+    user_id = str(interaction.user.id)
+    tasks = list(task_collection.find({"assignees": user_id}))
+
+    if not tasks:
+        return await interaction.response.send_message("🎉 現在抱えているタスクはありません！", ephemeral=True)
+
+    embed = discord.Embed(title=f"📋 {interaction.user.display_name} さんのタスク", color=discord.Color.green())
+    for t in tasks:
+        dl = f" ⏰ 期限: {t['deadline']}" if t.get('deadline') else ""
+        desc = t.get('description', '')
+        # 説明文があればそれを、無ければタスク名を表示
+        val = f"・{desc}" if desc else "（詳細説明なし）"
+        embed.add_field(name=f"📌 {t['task_name']}{dl}", value=val, inline=False)
+
+    await interaction.response.send_message(embed=embed, ephemeral=True)
 
 # --- 11. 起動 ---
 if __name__ == "__main__":
