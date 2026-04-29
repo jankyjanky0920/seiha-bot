@@ -21,6 +21,7 @@ db = client['discord_bot_db']
 collection = db['user_balance']
 daily_collection = db['daily_status']
 word_collection = db['word_dictionary']
+delete_collection = db['auto_delete_messages']
 
 PLAYLIST_URL = "https://youtube.com/playlist?list=PL1vnrKZzRuE6pKv-aVWdjs7p0UPu0Hulz&si=dZWYzD6Ji9TpAo3O"
 MC_ROLE_ID = 1480235861244383262
@@ -96,6 +97,14 @@ def get_target_user_ids(ctx):
             user_ids.add(member.id)
     return list(user_ids)
 
+def register_deletion(message_id, channel_id, hours=24):
+    delete_at = datetime.datetime.now(JST) + datetime.timedelta(hours=hours)
+    delete_collection.insert_one({
+        "message_id": message_id,
+        "channel_id": channel_id,
+        "delete_at": delete_at
+    })
+
 # --- 4. Webサーバー (Render/Keep-alive用) ---
 app = Flask('')
 @app.route('/')
@@ -136,10 +145,10 @@ class MyBot(commands.Bot):
         super().__init__(command_prefix="-", intents=intents)
 
     async def setup_hook(self):
-        # 修正：アクセス制限対策のため、自動同期を廃止しました。
-        # コマンドの更新が必要な場合は、ボット起動後に管理者権限で `-sync` と打ってください。
         daily_cipher_task.start() 
         daily_ranking_task.start()
+        send_pending_notices_task.start() # 【修正】開始されていなかったので追加
+        auto_delete_task.start()
 
 bot = MyBot()
 
@@ -263,6 +272,44 @@ async def send_pending_notices_task():
             except Exception as e:
                 print(f"遅延通知送信エラー: {e}")
         # 送信が完了したものは削除
+        notice_collection.delete_one({"_id": doc["_id"]})
+
+@tasks.loop(minutes=30)
+async def auto_delete_task():
+    await bot.wait_until_ready()
+    now = datetime.datetime.now(JST)
+    # 削除期限が現在時刻を過ぎているものを取得
+    expired_docs = list(delete_collection.find({"delete_at": {"$lte": now}}))
+    
+    for doc in expired_docs:
+        channel = bot.get_channel(doc['channel_id'])
+        if channel:
+            try:
+                msg = await channel.fetch_message(doc['message_id'])
+                await msg.delete()
+            except discord.NotFound:
+                pass # 既に削除されている場合は無視
+            except Exception as e:
+                print(f"自動削除エラー: {e}")
+        # 処理が終わったらDBから削除
+        delete_collection.delete_one({"_id": doc["_id"]})
+
+@tasks.loop(time=NOTICE_TIME)
+async def send_pending_notices_task():
+    await bot.wait_until_ready()
+    pending = list(notice_collection.find())
+    if not pending: return
+
+    for doc in pending:
+        channel = bot.get_channel(doc['channel_id'])
+        if channel:
+            try:
+                sent_msg = await channel.send(doc['message'])
+                # 【新規】送信したメッセージを24時間後に削除予約
+                register_deletion(sent_msg.id, sent_msg.channel.id)
+            except Exception as e:
+                print(f"遅延通知送信エラー: {e}")
+        # 送信が完了（または失敗）したものは削除
         notice_collection.delete_one({"_id": doc["_id"]})
 
 # --- 9. 管理者用コマンド (プレフィックス) ---
@@ -433,7 +480,8 @@ async def task_done(ctx, *, args: str):
     if not text_tokens: return await ctx.send("タスク名を指定してください。")
 
     task_name = text_tokens.pop(0)
-    reward = next((int(t) for t in text_tokens if t.isdigit()), 0) # 数字があれば報酬として扱う
+    # 【安全策】7桁以上の数字はIDとみなして無視（報酬バグ防止）
+    reward = next((int(t) for t in text_tokens if t.isdigit() and len(t) < 7), 0)
 
     if not target_ids: return await ctx.send("対象をメンションで指定してください。")
 
@@ -445,7 +493,7 @@ async def task_done(ctx, *, args: str):
     if reward > 0:
         for uid in target_ids: add_user_balance(uid, reward)
 
-    # 3. 解決の連絡 (時間の制御)
+    # 3. 解決の連絡
     now = datetime.datetime.now(JST)
     is_active_time = 8 <= now.hour < 22
 
@@ -454,12 +502,15 @@ async def task_done(ctx, *, args: str):
     msg = f"✅ **タスク完了**\n{target_mentions} さん、タスク `{task_name}` 完了を確認しました{reward_text}"
 
     if is_active_time:
-        await notify_channel.send(msg)
+        sent_msg = await notify_channel.send(msg)
+        # 【新規】即時通知した場合、24時間後に削除予約
+        register_deletion(sent_msg.id, sent_msg.channel.id)
         await ctx.send(f"タスク完了処理を実施し、{notify_channel.mention} へ通知しました。")
     else:
+        # DBに保存（send_pending_notices_task が朝に送信し、そこで削除予約も行われる）
         notice_collection.insert_one({"channel_id": notify_channel.id, "message": msg})
         await ctx.send(f"タスク完了処理を実施しました。時間外のため、明日の朝9時に {notify_channel.mention} へ通知します。")
-
+        
 @task_group.command(name="notice")
 async def task_notice(ctx, *, args: str=""):
     """-task notice [タスク名/対象] [#通知チャンネル(任意)]"""
@@ -485,9 +536,14 @@ async def task_notice(ctx, *, args: str=""):
                 messages.append(f"🔔 <@{uid}> さんの抱えているタスク:\n" + "\n".join(task_lines))
 
     if not messages: return await ctx.send("通知する対象やタスクが見つかりませんでした。")
-    for m in messages: await notify_channel.send(m)
+    
+    for m in messages: 
+        sent_msg = await notify_channel.send(m)
+        # 【新規】リマインド送信後、24時間後に削除予約
+        register_deletion(sent_msg.id, sent_msg.channel.id)
+        
     await ctx.send(f"{notify_channel.mention} に通知を送信しました。")
-
+    
 @task_group.command(name="list")
 async def task_list(ctx, *, args: str=""):
     """-task list [タスク名/対象]"""
