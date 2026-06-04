@@ -491,17 +491,19 @@ async def auto_delete_task():
         delete_collection.delete_one({"_id": doc["_id"]})
 
 
-# --- 9. 管理者用スラッシュコマンド (プレフィックス「_」) ---
+# --- 9. 管理者用コマンド (【最重要】救済用のテキストコマンド) ---
 
-@bot.tree.command(name="_sync", description="【管理者】スラッシュコマンドをDiscordサーバーに強制同期します")
-@app_commands.default_permissions(administrator=True)
-async def sync_commands_slash(interaction: discord.Interaction):
+@bot.command(name="sync")
+@commands.has_permissions(administrator=True)
+async def sync_commands(ctx):
+    """【救済用】チャット欄に「-sync」と打つことでスラッシュコマンドを強制復活させます"""
     guild = discord.Object(id=ALLOWED_GUILD_ID)
     bot.tree.copy_global_to(guild=guild)
-    bot.tree.clear_commands(guild=None)
     await bot.tree.sync(guild=guild)
-    await bot.tree.sync(guild=None)
-    await interaction.response.send_message("✅ コマンドの同期が完了しました！反映まで数分かかる場合があります。")
+    await ctx.send("✅ スラッシュコマンドをサーバーに強制同期しました！Discordアプリを一度 `Ctrl + R`（スマホはアプリ再起動）でリロードすると、全ての `/` コマンドが復活します。")
+
+
+# --- 9.5 管理者用スラッシュコマンド (プレフィックス「_」) ---
 
 @bot.tree.command(name="_update_ranking", description="【管理者】SPランキングチャンネルを強制手動更新します")
 @app_commands.default_permissions(administrator=True)
@@ -600,13 +602,14 @@ async def on_ready():
     print(f"{len(cached_beats)}件のビートを読み込みました！")
     await update_ranking_message()
     
-    # 起動時にコマンドを特定のギルドに即時反映
+    # 起動時にコマンドを特定のギルドに自動同期
     try:
         guild = discord.Object(id=ALLOWED_GUILD_ID)
+        bot.tree.copy_global_to(guild=guild)
         await bot.tree.sync(guild=guild)
-        print("ギルド専用スラッシュコマンドの同期に成功しました。")
+        print("ギルド専用スラッシュコマンドの自動同期に成功しました。")
     except Exception as e:
-        print(f"初期同期エラー: {e}")
+        print(f"初期自動同期エラー: {e}")
 
 @bot.tree.command(name="beat", description="再生リストからランダムにビートを選択します")
 async def beat(interaction: discord.Interaction):
