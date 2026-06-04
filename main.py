@@ -22,6 +22,7 @@ db = client['discord_bot_db']
 collection = db['user_balance']
 daily_collection = db['daily_status']
 word_collection = db['word_dictionary']
+rank_collection = db['user_ranks']       # 【新規】ランク情報管理用コレクション
 
 PLAYLIST_URL = "https://youtube.com/playlist?list=PL1vnrKZzRuE6pKv-aVWdjs7p0UPu0Hulz&si=dZWYzD6Ji9TpAo3O"
 MC_ROLE_ID = 1480235861244383262
@@ -29,16 +30,37 @@ ALLOWED_GUILD_ID = 1480208337533534379
 ANNOUNCE_CHANNEL_ID = 1492856858078220542
 CIPHER_VC_ID = 1480212977650110828
 DJ_BOOTH_CHANNEL_ID = 1492856858078220542
-RANKING_CHANNEL_ID = 1511865035578933278 # 【新規】SPランキングチャンネルID
+RANKING_CHANNEL_ID = 1511865035578933278 
 
 task_collection = db['tasks']
 notice_collection = db['pending_notices']
 delete_collection = db['auto_delete_messages']
 
+# --- 【新規】ランク名称・基準定義 ---
+B_NAMES = [
+    "No_Battle", "Choke_Prone", "Off_the_Dome", "Cypher_Freak",
+    "Raw_Vibe", "Hard_Core", "Mic_Killing", "The_Freestyle"
+]
+T_NAMES = [
+    "No_Track", "Bedroom_Artist", "Sound_Creator", "Lyricist",
+    "New_Wave", "Trendsetter", "Architect", "G.O.A.T."
+]
+
+def calculate_rank_level(points):
+    """【新規】ポイントから0〜7のランクレベルを算出する関数"""
+    if points <= 0: return 0
+    elif points <= 100: return 1
+    elif points <= 200: return 2
+    elif points <= 400: return 3
+    elif points <= 600: return 4
+    elif points <= 800: return 5
+    elif points <= 1000: return 6
+    else: return 7
+
 # --- 2. 時間設定 ---
 JST = datetime.timezone(datetime.timedelta(hours=9))
 START_TIME = datetime.time(hour=20, minute=50, tzinfo=JST) 
-MIDNIGHT_TIME = datetime.time(hour=0, minute=0, tzinfo=JST) # 【新規】24時更新用
+MIDNIGHT_TIME = datetime.time(hour=0, minute=0, tzinfo=JST) 
 NOTICE_TIME = datetime.time(hour=9, minute=0, tzinfo=JST)
 
 voice_active_minutes = {}
@@ -100,7 +122,6 @@ def register_deletion(message_id, channel_id, hours=24):
         "delete_at": delete_at
     })
 
-# --- 【大幅修正】ランキングテキスト生成 ＆ メッセージ更新ロジック ---
 async def get_sp_ranking():
     guild = bot.get_guild(ALLOWED_GUILD_ID)
     if not guild: return "サーバーが見つかりません。"
@@ -112,7 +133,6 @@ async def get_sp_ranking():
         sp = get_user_balance(member.id)
         ranking_data.append((member.display_name, sp))
 
-    # 一旦、スコアが高い順（降順）にソートして正しい順位を決める
     ranking_data.sort(key=lambda x: x[1], reverse=True)
     if not ranking_data: return "ランキング対象のユーザーがいません。"
 
@@ -121,7 +141,6 @@ async def get_sp_ranking():
         medal = "🥇 1位" if i == 1 else "🥈 2位" if i == 2 else "🥉 3位" if i == 3 else f"{i}位"
         lines.append(f"{medal}：{name} (**{sp} SP**)")
 
-    # 「一番下が1位」にするため、配列を逆転（昇順）させる
     lines.reverse()
 
     msg = "🏆 **声覇所持SPランキング（常時更新）** 🏆\n"
@@ -131,22 +150,15 @@ async def get_sp_ranking():
     return msg
 
 async def update_ranking_message():
-    """SPランキングチャンネルのメッセージを編集・更新する共通関数"""
     channel = bot.get_channel(RANKING_CHANNEL_ID)
     if not channel:
         print("エラー: ランキングチャンネルが見つかりません。")
         return
-
     ranking_text = await get_sp_ranking()
-
-    # チャンネル内の直近メッセージからBot自身のものを探す
     async for message in channel.history(limit=10):
         if message.author == bot.user:
-            # 見つかったら中身を最新データに書き換え
             await message.edit(content=ranking_text, allowed_mentions=discord.AllowedMentions.none())
             return
-
-    # 過去ログにBotのメッセージが無ければ新しく送信する
     await channel.send(content=ranking_text, allowed_mentions=discord.AllowedMentions.none())
 
 
@@ -171,7 +183,7 @@ class MyBot(commands.Bot):
 
     async def setup_hook(self):
         daily_cipher_task.start() 
-        midnight_ranking_task.start()     # 【修正】24時更新タスクに変更
+        midnight_ranking_task.start()     
         send_pending_notices_task.start() 
         auto_delete_task.start()         
 
@@ -228,7 +240,6 @@ async def run_cipher_logic(end_datetime):
                         add_user_balance(user_id, bonus)
                         save_rewarded_user(user_id)
                         
-                        # 【トリガー追加】サイファー報酬時にランキングを更新
                         await update_ranking_message()
                         
                         new_balance = get_user_balance(user_id)
@@ -255,7 +266,6 @@ async def daily_cipher_task():
 
 @tasks.loop(time=MIDNIGHT_TIME)
 async def midnight_ranking_task():
-    """【新規】毎日24時にランキングメッセージを念のため最新に同期する"""
     await bot.wait_until_ready()
     await update_ranking_message()
 
@@ -301,10 +311,78 @@ async def sync_commands(ctx):
     await bot.tree.sync(guild=None)
     await ctx.send("✅ コマンドの同期が完了しました！反映まで数分かかる場合があります。")
 
+@bot.command(name="setup-ranks")
+@commands.has_permissions(administrator=True)
+async def setup_ranks(ctx):
+    """【新規・管理者専用】64種類のランクロールを自動作成します（レートリミット対策付き）"""
+    status_msg = await ctx.send("🔄 64種類のランクロールを作成・確認中... (少し時間がかかります)")
+    guild = ctx.guild
+    created_count = 0
+    existing_count = 0
+
+    for b in range(8):
+        for t in range(8):
+            # 例: "B1-T4 Choke_Prone_New_Wave"
+            role_name = f"B{b}-T{t} {B_NAMES[b]}_{T_NAMES[t]}"
+            existing_role = discord.utils.get(guild.roles, name=role_name)
+            
+            if not existing_role:
+                try:
+                    await guild.create_role(name=role_name, mentionable=False, reason="ランクシステムセットアップ")
+                    created_count += 1
+                    await asyncio.sleep(0.4) # API制限(レートリミット)を回避するためのウェイト
+                except Exception as e:
+                    print(f"ロール作成エラー [{role_name}]: {e}")
+            else:
+                existing_count += 1
+
+    await status_msg.edit(content=f"✅ ランクロールの作成が完了しました！\n・新しく作ったロール: {created_count}個\n・既に存在していたロール: {existing_count}個")
+
+@bot.command(name="init-mc-ranks")
+@commands.has_permissions(administrator=True)
+async def init_mc_ranks(ctx):
+    """【新規・管理者専用】@MCロールがついた全員に初期ランク「B0-T0」を付与＆DB初期化"""
+    guild = ctx.guild
+    mc_role = guild.get_role(MC_ROLE_ID)
+    if not mc_role:
+        return await ctx.send("❌ 設定されたMCロールIDが見つかりません。")
+
+    init_role_name = f"B0-T0 {B_NAMES[0]}_{T_NAMES[0]}"
+    target_role = discord.utils.get(guild.roles, name=init_role_name)
+    if not target_role:
+        return await ctx.send(f"❌ 初期ロール「{init_role_name}」がサーバーにありません。先に `-setup-ranks` を実行してください。")
+
+    status_msg = await ctx.send(f"🔄 @MC メンバー（{len(mc_role.members)}人）の初期化と「B0-T0」ロールの付与を開始します...")
+    success_count = 0
+
+    for member in mc_role.members:
+        # 今後の拡張（クエストや一時ポイント）を見据えて、DB側に初期ステータスを作成/上書き
+        rank_collection.update_one(
+            {'user_id': str(member.id)},
+            {'$set': {
+                'b_points': 0,
+                't_points': 0,
+                'b_rank': 0,
+                't_rank': 0,
+                'temporary_rates': [] # 将来の「消失期限つきポイント」格納用
+            }},
+            upsert=True
+        )
+
+        # メンバーにB0-T0ロールがまだ無ければ付与
+        if target_role not in member.roles:
+            try:
+                await member.add_roles(target_role, reason="ランクシステム初期化")
+                success_count += 1
+                await asyncio.sleep(0.2) # API制限対策
+            except Exception as e:
+                print(f"ロール付与失敗 [{member.display_name}]: {e}")
+
+    await status_msg.edit(content=f"✅ 初期化が完了しました！\n・対象MCメンバー: {len(mc_role.members)}人\n・ロールを新しく付与した人数: {success_count}人\n・全員の初期DBデータを構築しました。")
+
 @bot.command(name="update-ranking")
 @commands.has_permissions(administrator=True)
 async def manual_update_ranking(ctx):
-    """【管理者専用】SPランキングチャンネルを即座に強制更新します"""
     await update_ranking_message()
     await ctx.send("✅ SPランキングチャンネルを強制更新しました。")
 
@@ -313,10 +391,7 @@ async def manual_update_ranking(ctx):
 async def manual_bonus(ctx, member: discord.Member):
     amount = random.randint(50, 100)
     add_user_balance(member.id, amount)
-    
-    # 【トリガー追加】
     await update_ranking_message()
-    
     new_balance = get_user_balance(member.id)
     await ctx.send(
         f"🎁 {member.mention} さんにボーナスを付与しました！\n付与額: **{amount} SP**\n現在の所持金: **{new_balance} SP**",
@@ -343,10 +418,7 @@ async def leave_vc(ctx):
 @commands.has_permissions(administrator=True)
 async def add_sp(ctx, member: discord.Member, amount: int):
     add_user_balance(member.id, amount)
-    
-    # 【トリガー追加】
     await update_ranking_message()
-    
     await ctx.send(f"{member.display_name}に **{amount} SP** 付与しました。")
 
 @bot.command(name="bulk-remove")
@@ -447,7 +519,6 @@ async def task_done(ctx, *, args: str):
 
     if reward > 0:
         for uid in target_ids: add_user_balance(uid, reward)
-        # 【トリガー追加】タスク報酬発生時にランキング更新
         await update_ranking_message()
 
     now = datetime.datetime.now(JST)
@@ -526,8 +597,6 @@ async def on_ready():
     print("ビートリストを読み込み中...")
     cached_beats = await asyncio.to_thread(get_playlist_urls, PLAYLIST_URL)
     print(f"{len(cached_beats)}件のビートを読み込みました！")
-    
-    # 起動時に自動的にランキングメッセージを初回同期・作成
     await update_ranking_message()
 
 @bot.tree.command(name="beat", description="再生リストからランダムにビートを選択します")
@@ -594,9 +663,7 @@ async def sent(interaction: discord.Interaction, member: discord.Member, amount:
     collection.update_one({'user_id': str(interaction.user.id)}, {'$inc': {'balance': -amount}})
     collection.update_one({'user_id': str(member.id)}, {'$inc': {'balance': amount}}, upsert=True)
     
-    # 【トリガー追加】送金時にランキングを更新
     await update_ranking_message()
-    
     await interaction.response.send_message(f"{member.display_name}さんに **{amount} SP** 送金しました！")
 
 @bot.tree.command(name="add_word", description="ワードバトルの辞書に新しい単語を追加します")
