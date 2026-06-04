@@ -518,6 +518,30 @@ async def readingbeat_slash(interaction: discord.Interaction):
         else: await interaction.followup.send("⚠️ リストが空です。")
     except Exception: await interaction.followup.send("❌ エラーが発生しました。")
 
+# --------------------------------------------------
+# B軸レート管理用コマンド（ここから）
+# --------------------------------------------------
+
+# 1. カテゴリのプルダウン選択肢（※必ずコマンドより上に定義する）
+RATING_B_CATEGORIES = [
+    app_commands.Choice(name="ネット草大会", value="ネット草大会"),
+    app_commands.Choice(name="ネット本戦", value="ネット本戦"),
+    app_commands.Choice(name="リアルイベント", value="リアルイベント"),
+    app_commands.Choice(name="現場予選大会", value="現場予選大会"),
+    app_commands.Choice(name="現場本戦大会", value="現場本戦大会")
+]
+
+# 2. B軸ポイント計算用のマスタデータ
+# base: 参加ポイント, p: プレ予選, s: 1回戦/シード, d: 2回戦以降, f: 決勝, v: 優勝, exp_months: 有効期限(月)
+POINT_TABLE_B = {
+    "ネット草大会": {"base": 25, "p": 0, "s": 15, "d": 35, "f": 55, "v": 65, "exp_months": 6},
+    "ネット本戦": {"base": 25, "p": 0, "s": 20, "d": 40, "f": 60, "v": 70, "exp_months": 6},
+    "リアルイベント": {"base": 30, "p": 0, "s": 30, "d": 50, "f": 70, "v": 90, "exp_months": 12},
+    "現場予選大会": {"base": 40, "p": 20, "s": 40, "d": 60, "f": 80, "v": 100, "exp_months": 12},
+    "現場本戦大会": {"base": 100, "p": 0, "s": 100, "d": 150, "f": 200, "v": 300, "exp_months": 36}
+}
+
+# 3. コマンド本体
 @bot.tree.command(name="z_rating_b", description=msg.DESC_Z_RATING_B)
 @app_commands.describe(
     mc="レートが上がる対象のユーザー",
@@ -536,31 +560,29 @@ async def z_rating_b_slash(
     category: str, 
     result: str
 ):
-    # 1. 開催日(when)のバリデーションとパース
+    # 開催日(when)のバリデーションとパース
     if len(when) != 8 or not when.isdigit():
         return await interaction.response.send_message(msg.MSG_RATING_B_ERR_DATE, ephemeral=True)
     
     try:
-        # 入力された文字列を datetime 型に変換
         event_date = datetime.datetime.strptime(when, "%Y%m%d").replace(tzinfo=JST)
     except ValueError:
-        # 「20240230」など実在しない日付の場合はエラー
         return await interaction.response.send_message(msg.MSG_RATING_B_ERR_DATE, ephemeral=True)
 
-    # 2. 結果文字列のバリデーション
+    # 結果文字列のバリデーション
     valid_chars = set("psdfvl")
     result_lower = result.lower()
     if not all(char in valid_chars for char in result_lower):
         return await interaction.response.send_message(msg.MSG_RATING_B_ERR_RESULT, ephemeral=True)
         
-    # 3. ポイント計算
+    # ポイント計算
     table = POINT_TABLE_B[category]
     gained_points = table["base"]
     
     for char in result_lower:
         gained_points += table.get(char, 0)
         
-    # 4. 有効期限の計算（【変更点】開催日 event_date を基準にする）
+    # 有効期限の計算（開催日を基準）
     months_to_add = table["exp_months"]
     new_month = event_date.month - 1 + months_to_add
     expire_year = event_date.year + new_month // 12
@@ -570,16 +592,16 @@ async def z_rating_b_slash(
     expire_day = min(event_date.day, last_day)
     expire_date = event_date.replace(year=expire_year, month=expire_month, day=expire_day)
     
-    # 5. データベース(rank_collection)への記録
-    now = datetime.datetime.now(JST) # 現在時刻（コマンド実行日時）
+    # データベースへの記録
+    now = datetime.datetime.now(JST)
     rate_record = {
         "event": event,
         "category": category,
-        "event_date": event_date,  # 開催日をDBにも保存しておく
+        "event_date": event_date,
         "result": result_lower,
         "points": gained_points,
         "granted_at": now,
-        "expire_at": expire_date   # 計算した有効期限
+        "expire_at": expire_date
     }
     
     rank_collection.update_one(
@@ -593,13 +615,12 @@ async def z_rating_b_slash(
         {'$push': {'temporary_rates': rate_record}}
     )
     
-    # 6. 現在の「有効な」合計ポイントを再計算
+    # 有効な合計ポイントの再計算
     user_doc = rank_collection.find_one({'user_id': str(mc.id)})
     valid_total = 0
     active_rates = []
     
     for record in user_doc.get('temporary_rates', []):
-        # 「コマンド実行時点(now)」で期限が切れていないものだけを再集計
         if record['expire_at'] > now:
             valid_total += record['points']
             active_rates.append(record)
@@ -614,7 +635,7 @@ async def z_rating_b_slash(
         }
     )
     
-    # 7. 結果の送信
+    # 結果の送信
     event_str = event_date.strftime("%Y/%m/%d")
     expire_str = expire_date.strftime("%Y/%m/%d")
     res_text = msg.MSG_RATING_B_SUCCESS.format(
@@ -630,6 +651,9 @@ async def z_rating_b_slash(
     
     await interaction.response.send_message(res_text, allowed_mentions=discord.AllowedMentions.none())
 
+# --------------------------------------------------
+# B軸レート管理用コマンド（ここまで）
+# --------------------------------------------------
 
 # --- 10. スラッシュコマンド (一般ユーザー用) ---
 cached_beats = []
