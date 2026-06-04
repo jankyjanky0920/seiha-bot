@@ -518,6 +518,118 @@ async def readingbeat_slash(interaction: discord.Interaction):
         else: await interaction.followup.send("⚠️ リストが空です。")
     except Exception: await interaction.followup.send("❌ エラーが発生しました。")
 
+@bot.tree.command(name="z_rating_b", description=msg.DESC_Z_RATING_B)
+@app_commands.describe(
+    mc="レートが上がる対象のユーザー",
+    event="イベント名（自由入力）",
+    when="開催日（YYYYMMDDの8桁 例: 20260605）",
+    category="イベントのカテゴリ",
+    result="結果（p, s, d, f, v, l で指定。例: ssdl）"
+)
+@app_commands.choices(category=RATING_B_CATEGORIES)
+@app_commands.default_permissions(administrator=True)
+async def z_rating_b_slash(
+    interaction: discord.Interaction, 
+    mc: discord.Member, 
+    event: str, 
+    when: str,
+    category: str, 
+    result: str
+):
+    # 1. 開催日(when)のバリデーションとパース
+    if len(when) != 8 or not when.isdigit():
+        return await interaction.response.send_message(msg.MSG_RATING_B_ERR_DATE, ephemeral=True)
+    
+    try:
+        # 入力された文字列を datetime 型に変換
+        event_date = datetime.datetime.strptime(when, "%Y%m%d").replace(tzinfo=JST)
+    except ValueError:
+        # 「20240230」など実在しない日付の場合はエラー
+        return await interaction.response.send_message(msg.MSG_RATING_B_ERR_DATE, ephemeral=True)
+
+    # 2. 結果文字列のバリデーション
+    valid_chars = set("psdfvl")
+    result_lower = result.lower()
+    if not all(char in valid_chars for char in result_lower):
+        return await interaction.response.send_message(msg.MSG_RATING_B_ERR_RESULT, ephemeral=True)
+        
+    # 3. ポイント計算
+    table = POINT_TABLE_B[category]
+    gained_points = table["base"]
+    
+    for char in result_lower:
+        gained_points += table.get(char, 0)
+        
+    # 4. 有効期限の計算（【変更点】開催日 event_date を基準にする）
+    months_to_add = table["exp_months"]
+    new_month = event_date.month - 1 + months_to_add
+    expire_year = event_date.year + new_month // 12
+    expire_month = new_month % 12 + 1
+    
+    _, last_day = calendar.monthrange(expire_year, expire_month)
+    expire_day = min(event_date.day, last_day)
+    expire_date = event_date.replace(year=expire_year, month=expire_month, day=expire_day)
+    
+    # 5. データベース(rank_collection)への記録
+    now = datetime.datetime.now(JST) # 現在時刻（コマンド実行日時）
+    rate_record = {
+        "event": event,
+        "category": category,
+        "event_date": event_date,  # 開催日をDBにも保存しておく
+        "result": result_lower,
+        "points": gained_points,
+        "granted_at": now,
+        "expire_at": expire_date   # 計算した有効期限
+    }
+    
+    rank_collection.update_one(
+        {'user_id': str(mc.id)}, 
+        {'$setOnInsert': {'b_points': 0, 't_points': 0, 'b_rank': 0, 't_rank': 0, 'temporary_rates': []}},
+        upsert=True
+    )
+    
+    rank_collection.update_one(
+        {'user_id': str(mc.id)},
+        {'$push': {'temporary_rates': rate_record}}
+    )
+    
+    # 6. 現在の「有効な」合計ポイントを再計算
+    user_doc = rank_collection.find_one({'user_id': str(mc.id)})
+    valid_total = 0
+    active_rates = []
+    
+    for record in user_doc.get('temporary_rates', []):
+        # 「コマンド実行時点(now)」で期限が切れていないものだけを再集計
+        if record['expire_at'] > now:
+            valid_total += record['points']
+            active_rates.append(record)
+            
+    rank_collection.update_one(
+        {'user_id': str(mc.id)},
+        {
+            '$set': {
+                'b_points': valid_total,
+                'temporary_rates': active_rates
+            }
+        }
+    )
+    
+    # 7. 結果の送信
+    event_str = event_date.strftime("%Y/%m/%d")
+    expire_str = expire_date.strftime("%Y/%m/%d")
+    res_text = msg.MSG_RATING_B_SUCCESS.format(
+        mention=mc.mention,
+        event=event,
+        event_date=event_str,
+        category=category,
+        result=result,
+        points=gained_points,
+        expire_date=expire_str,
+        total_points=valid_total
+    )
+    
+    await interaction.response.send_message(res_text, allowed_mentions=discord.AllowedMentions.none())
+
 
 # --- 10. スラッシュコマンド (一般ユーザー用) ---
 cached_beats = []
