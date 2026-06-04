@@ -22,7 +22,7 @@ db = client['discord_bot_db']
 collection = db['user_balance']
 daily_collection = db['daily_status']
 word_collection = db['word_dictionary']
-rank_collection = db['user_ranks']       # 【新規】ランク情報管理用コレクション
+rank_collection = db['user_ranks']       # ランク情報管理用コレクション
 
 PLAYLIST_URL = "https://youtube.com/playlist?list=PL1vnrKZzRuE6pKv-aVWdjs7p0UPu0Hulz&si=dZWYzD6Ji9TpAo3O"
 MC_ROLE_ID = 1480235861244383262
@@ -36,7 +36,7 @@ task_collection = db['tasks']
 notice_collection = db['pending_notices']
 delete_collection = db['auto_delete_messages']
 
-# --- 【新規】ランク名称・基準定義 ---
+# --- ランク名称・基準定義 ---
 B_NAMES = [
     "No_Battle", "Choke_Prone", "Off_the_Dome", "Cypher_Freak",
     "Raw_Vibe", "Hard_Core", "Mic_Killing", "The_Freestyle"
@@ -47,7 +47,7 @@ T_NAMES = [
 ]
 
 def calculate_rank_level(points):
-    """【新規】ポイントから0〜7のランクレベルを算出する関数"""
+    """ポイントから0〜7のランクレベルを算出する関数"""
     if points <= 0: return 0
     elif points <= 100: return 1
     elif points <= 200: return 2
@@ -85,6 +85,13 @@ def add_user_balance(user_id, amount):
         upsert=True
     )
 
+def set_user_balance(user_id, amount):
+    collection.update_one(
+        {'user_id': str(user_id)},
+        {'$set': {'balance': amount}},
+        upsert=True
+    )
+
 def get_rewarded_users():
     today = datetime.datetime.now(JST).strftime('%Y-%m-%d')
     doc = daily_collection.find_one({'date': today})
@@ -104,15 +111,6 @@ def remove_rewarded_user(user_id):
         {'date': today},
         {'$pull': {'users': str(user_id)}}
     )
-
-def get_target_user_ids(ctx):
-    user_ids = set()
-    for user in ctx.message.mentions:
-        user_ids.add(user.id)
-    for role in ctx.message.role_mentions:
-        for member in role.members:
-            user_ids.add(member.id)
-    return list(user_ids)
 
 def register_deletion(message_id, channel_id, hours=24):
     delete_at = datetime.datetime.now(JST) + datetime.timedelta(hours=hours)
@@ -174,6 +172,155 @@ def keep_alive():
     t.daemon = True
     t.start()
 
+
+# --- 5. 管理者専用コマンドグループ (タスク) ---
+class TaskGroup(app_commands.Group, name="_task", description="【管理者専用】タスクの管理を行います"):
+    
+    @app_commands.command(name="add", description="タスクを追加または更新します")
+    @app_commands.describe(task_name="タスク名", member="対象ユーザー", role="対象ロール（どちらか必須）", deadline="期限(MM/DDなど)", description="説明文")
+    @app_commands.default_permissions(administrator=True)
+    async def task_add(self, interaction: discord.Interaction, task_name: str, member: discord.Member = None, role: discord.Role = None, deadline: str = None, description: str = ""):
+        target_ids = set()
+        if member: target_ids.add(str(member.id))
+        if role:
+            for m in role.members: target_ids.add(str(m.id))
+            
+        if not target_ids:
+            return await interaction.response.send_message("❌ エラー: 対象（ユーザーまたはロール）をメンションで指定してください。", ephemeral=True)
+            
+        doc = task_collection.find_one({"task_name": task_name})
+        if doc:
+            task_collection.update_one({"task_name": task_name}, {"$addToSet": {"assignees": {"$each": list(target_ids)}}})
+            updates = {}
+            if description: updates["description"] = description
+            if deadline: updates["deadline"] = deadline
+            if updates: task_collection.update_one({"task_name": task_name}, {"$set": updates})
+        else:
+            task_collection.insert_one({"task_name": task_name, "description": description, "deadline": deadline, "assignees": list(target_ids)})
+            
+        dl_text = f" (期限: {deadline})" if deadline else ""
+        await interaction.response.send_message(f"タスク `{task_name}`{dl_text} を追加/更新しました！ 対象: {len(target_ids)}人")
+
+    @app_commands.command(name="edit", description="タスクの説明文を更新します")
+    @app_commands.describe(task_name="対象のタスク名", new_desc="新しい説明文")
+    @app_commands.default_permissions(administrator=True)
+    async def task_edit(self, interaction: discord.Interaction, task_name: str, new_desc: str):
+        result = task_collection.update_one({"task_name": task_name}, {"$set": {"description": new_desc}})
+        if result.matched_count: 
+            await interaction.response.send_message(f"タスク `{task_name}` の説明を更新しました。")
+        else: 
+            await interaction.response.send_message(f"タスク `{task_name}` が見つかりません。", ephemeral=True)
+
+    @app_commands.command(name="delete", description="タスク自体、または特定のユーザーをタスクから削除します")
+    @app_commands.describe(task_name="タスク名", member="対象ユーザー", role="対象ロール")
+    @app_commands.default_permissions(administrator=True)
+    async def task_delete(self, interaction: discord.Interaction, task_name: str = None, member: discord.Member = None, role: discord.Role = None):
+        target_ids = set()
+        if member: target_ids.add(str(member.id))
+        if role:
+            for m in role.members: target_ids.add(str(m.id))
+            
+        if task_name and target_ids:
+            task_collection.update_one({"task_name": task_name}, {"$pull": {"assignees": {"$in": list(target_ids)}}})
+            await interaction.response.send_message(f"指定されたユーザーからタスク `{task_name}` を外しました。")
+        elif task_name and not target_ids:
+            task_collection.delete_one({"task_name": task_name})
+            await interaction.response.send_message(f"タスク `{task_name}` を完全に削除しました。")
+        elif not task_name and target_ids:
+            task_collection.update_many({}, {"$pull": {"assignees": {"$in": list(target_ids)}}})
+            await interaction.response.send_message(f"指定されたユーザーが抱えているすべてのタスクを削除しました。")
+        else: 
+            return await interaction.response.send_message("タスク名か対象メンションの少なくとも一方を指定してください。", ephemeral=True)
+        task_collection.delete_many({"assignees": {"$size": 0}})
+
+    @app_commands.command(name="done", description="タスクを完了状態にし、報酬SPを付与します")
+    @app_commands.describe(task_name="タスク名", member="対象ユーザー", role="対象ロール", reward="報酬額(SP)", channel="通知先チャンネル（省略時は現在）")
+    @app_commands.default_permissions(administrator=True)
+    async def task_done(self, interaction: discord.Interaction, task_name: str, member: discord.Member = None, role: discord.Role = None, reward: int = 0, channel: discord.TextChannel = None):
+        target_ids = set()
+        if member: target_ids.add(str(member.id))
+        if role:
+            for m in role.members: target_ids.add(str(m.id))
+            
+        if not target_ids:
+            return await interaction.response.send_message("❌ エラー: 対象をメンションまたはロールで指定してください。", ephemeral=True)
+            
+        notify_channel = channel if channel else interaction.channel
+
+        task_collection.update_one({"task_name": task_name}, {"$pull": {"assignees": {"$in": list(target_ids)}}})
+        task_collection.delete_many({"assignees": {"$size": 0}}) 
+
+        if reward > 0:
+            for uid in target_ids: 
+                add_user_balance(int(uid), reward)
+            await update_ranking_message()
+
+        now = datetime.datetime.now(JST)
+        is_active_time = 8 <= now.hour < 22
+        target_mentions = " ".join([f"<@{uid}>" for uid in target_ids])
+        reward_text = f"\n💰 **{reward} SP** の報酬が付与されました！" if reward > 0 else ""
+        msg = f"✅ **タスク完了**\n{target_mentions} さん、タスク `{task_name}` 完了を確認しました{reward_text}"
+
+        if is_active_time:
+            sent_msg = await notify_channel.send(msg)
+            register_deletion(sent_msg.id, sent_msg.channel.id)
+            await interaction.response.send_message(f"タスク完了処理を実施し、{notify_channel.mention} へ通知しました。")
+        else:
+            notice_collection.insert_one({"channel_id": notify_channel.id, "message": msg})
+            await interaction.response.send_message(f"タスク完了処理を実施しました。時間外のため、明日の朝9時に {notify_channel.mention} へ通知します。")
+
+    @app_commands.command(name="notice", description="タスクのリマインドをチャンネルへ手動通知します")
+    @app_commands.describe(task_name="タスク名", member="対象ユーザー", channel="通知先チャンネル")
+    @app_commands.default_permissions(administrator=True)
+    async def task_notice(self, interaction: discord.Interaction, task_name: str = None, member: discord.Member = None, channel: discord.TextChannel = None):
+        notify_channel = channel if channel else interaction.channel
+        messages = []
+        if task_name:
+            task = task_collection.find_one({"task_name": task_name})
+            if task and task['assignees']:
+                mentions = " ".join([f"<@{uid}>" for uid in task['assignees']])
+                dl = f" (期限: {task['deadline']})" if task.get('deadline') else ""
+                messages.append(f"🔔 **リマインド**: `{task_name}`{dl}\n{mentions}\n> {task.get('description', '')}")
+        elif member:
+            tasks_list = list(task_collection.find({"assignees": str(member.id)}))
+            if tasks_list:
+                task_lines = [f"・`{t['task_name']}`" + (f"(期限:{t['deadline']})" if t.get('deadline') else "") for t in tasks_list]
+                messages.append(f"🔔 <@{member.id}> さんの抱えているタスク:\n" + "\n".join(task_lines))
+                
+        if not messages: 
+            return await interaction.response.send_message("通知する対象やタスクが見つかりませんでした。", ephemeral=True)
+            
+        for m in messages: 
+            sent_msg = await notify_channel.send(m)
+            register_deletion(sent_msg.id, sent_msg.channel.id)
+        await interaction.response.send_message(f"{notify_channel.mention} に通知を送信しました。")
+
+    @app_commands.command(name="list", description="現在登録されているタスクを一覧表示します")
+    @app_commands.describe(task_name="特定のタスク名のみ表示", member="特定のユーザーのタスクのみ表示")
+    @app_commands.default_permissions(administrator=True)
+    async def task_list(self, interaction: discord.Interaction, task_name: str = None, member: discord.Member = None):
+        embed = discord.Embed(title="📋 タスク一覧", color=discord.Color.blue())
+        if task_name:
+            task = task_collection.find_one({"task_name": task_name})
+            if not task: return await interaction.response.send_message("タスクが見つかりません。", ephemeral=True)
+            mentions = " ".join([f"<@{uid}>" for uid in task['assignees']])
+            dl = f" (期限: {task['deadline']})" if task.get('deadline') else ""
+            embed.add_field(name=f"{task['task_name']}{dl}", value=f"担当: {mentions}\n説明: {task.get('description', 'なし')}")
+        elif member:
+            uid = str(member.id)
+            tasks_list = list(task_collection.find({"assignees": uid}))
+            if not tasks_list: return await interaction.response.send_message("対象者はタスクを持っていません。", ephemeral=True)
+            val = "".join([f"・**{t['task_name']}**" + (f" (期限:{t['deadline']})" if t.get('deadline') else "") + "\n" for t in tasks_list])
+            embed.add_field(name=f"<@{uid}> さんのタスク", value=val)
+        else:
+            tasks_list = list(task_collection.find())
+            if not tasks_list: return await interaction.response.send_message("現在登録されているタスクはありません。", ephemeral=True)
+            for t in tasks_list:
+                dl = f" [期限:{t['deadline']}]" if t.get('deadline') else ""
+                embed.add_field(name=f"{t['task_name']}{dl}", value=f"担当者: {len(t['assignees'])}人", inline=False)
+        await interaction.response.send_message(embed=embed)
+
+
 # --- 6. Bot本体の定義 ---
 intents = discord.Intents.all()
 
@@ -182,12 +329,17 @@ class MyBot(commands.Bot):
         super().__init__(command_prefix="-", intents=intents)
 
     async def setup_hook(self):
+        # 管理者専用タスクグループコマンドの登録
+        self.tree.add_command(TaskGroup())
+        
+        # 定期タスクループの起動
         daily_cipher_task.start() 
         midnight_ranking_task.start()     
         send_pending_notices_task.start() 
-        auto_delete_task.start()         
+        auto_delete_task.start()          
 
 bot = MyBot()
+
 
 # --- 7. サイファー監視ロジック ---
 async def run_cipher_logic(end_datetime):
@@ -256,6 +408,7 @@ async def run_cipher_logic(end_datetime):
             await current_vc_client.disconnect(force=True)
         print("23:00になりました。監視を終了し、退室しました。")
 
+
 # --- 8. 定期タスク ---
 @tasks.loop(time=START_TIME)
 async def daily_cipher_task():
@@ -268,6 +421,43 @@ async def daily_cipher_task():
 async def midnight_ranking_task():
     await bot.wait_until_ready()
     await update_ranking_message()
+    
+    # 【自動処理】@MCロールを保持し、ランクを1つも持っていない人にB0-T0を自動付与
+    guild = bot.get_guild(ALLOWED_GUILD_ID)
+    if not guild: return
+    
+    mc_role = guild.get_role(MC_ROLE_ID)
+    if not mc_role: return
+    
+    init_role_name = f"B0-T0 {B_NAMES[0]}_{T_NAMES[0]}"
+    init_role = discord.utils.get(guild.roles, name=init_role_name)
+    if not init_role:
+        print(f"深夜自動ランク付与エラー: 初期ロール '{init_role_name}' が見つかりません。")
+        return
+
+    for member in mc_role.members:
+        # 正規表現を使い、既に「B○-T○」から始まるランク系ロールを1つでも持っているか判定
+        has_rank = any(re.match(r"^B[0-7]-T[0-7]", role.name) for role in member.roles)
+        
+        if not has_rank:
+            try:
+                # DB情報を初期化 ($setOnInsertにより既存の別データがあれば上書きしない)
+                rank_collection.update_one(
+                    {'user_id': str(member.id)},
+                    {'$setOnInsert': {
+                        'b_points': 0, 't_points': 0, 
+                        'b_rank': 0, 't_rank': 0,
+                        'temporary_rates': []
+                    }},
+                    upsert=True
+                )
+                
+                # B0-T0ロールをメンバーへ自動付与
+                await member.add_roles(init_role, reason="深夜の未ランクMCメンバーへの自動割り当て")
+                await asyncio.sleep(0.3) # APIレートリミット（負荷）対策
+                print(f"【自動ランク付与】 {member.display_name} へ {init_role_name} を自動適用しました。")
+            except Exception as e:
+                print(f"自動ランク付与失敗 [{member.display_name}]: {e}")
 
 @tasks.loop(time=NOTICE_TIME)
 async def send_pending_notices_task():
@@ -300,294 +490,105 @@ async def auto_delete_task():
             except Exception as e: print(f"自動削除エラー: {e}")
         delete_collection.delete_one({"_id": doc["_id"]})
 
-# --- 9. 管理者用コマンド (プレフィックス) ---
-@bot.command(name="sync")
-@commands.has_permissions(administrator=True)
-async def sync_commands(ctx):
+
+# --- 9. 管理者用スラッシュコマンド (プレフィックス「_」) ---
+
+@bot.tree.command(name="_sync", description="【管理者】スラッシュコマンドをDiscordサーバーに強制同期します")
+@app_commands.default_permissions(administrator=True)
+async def sync_commands_slash(interaction: discord.Interaction):
     guild = discord.Object(id=ALLOWED_GUILD_ID)
     bot.tree.copy_global_to(guild=guild)
     bot.tree.clear_commands(guild=None)
     await bot.tree.sync(guild=guild)
     await bot.tree.sync(guild=None)
-    await ctx.send("✅ コマンドの同期が完了しました！反映まで数分かかる場合があります。")
+    await interaction.response.send_message("✅ コマンドの同期が完了しました！反映まで数分かかる場合があります。")
 
-@bot.command(name="setup-ranks")
-@commands.has_permissions(administrator=True)
-async def setup_ranks(ctx):
-    """【新規・管理者専用】64種類のランクロールを自動作成します（レートリミット対策付き）"""
-    status_msg = await ctx.send("🔄 64種類のランクロールを作成・確認中... (少し時間がかかります)")
-    guild = ctx.guild
-    created_count = 0
-    existing_count = 0
-
-    for b in range(8):
-        for t in range(8):
-            # 例: "B1-T4 Choke_Prone_New_Wave"
-            role_name = f"B{b}-T{t} {B_NAMES[b]}_{T_NAMES[t]}"
-            existing_role = discord.utils.get(guild.roles, name=role_name)
-            
-            if not existing_role:
-                try:
-                    await guild.create_role(name=role_name, mentionable=False, reason="ランクシステムセットアップ")
-                    created_count += 1
-                    await asyncio.sleep(0.4) # API制限(レートリミット)を回避するためのウェイト
-                except Exception as e:
-                    print(f"ロール作成エラー [{role_name}]: {e}")
-            else:
-                existing_count += 1
-
-    await status_msg.edit(content=f"✅ ランクロールの作成が完了しました！\n・新しく作ったロール: {created_count}個\n・既に存在していたロール: {existing_count}個")
-
-@bot.command(name="init-mc-ranks")
-@commands.has_permissions(administrator=True)
-async def init_mc_ranks(ctx):
-    """【新規・管理者専用】@MCロールがついた全員に初期ランク「B0-T0」を付与＆DB初期化"""
-    guild = ctx.guild
-    mc_role = guild.get_role(MC_ROLE_ID)
-    if not mc_role:
-        return await ctx.send("❌ 設定されたMCロールIDが見つかりません。")
-
-    init_role_name = f"B0-T0 {B_NAMES[0]}_{T_NAMES[0]}"
-    target_role = discord.utils.get(guild.roles, name=init_role_name)
-    if not target_role:
-        return await ctx.send(f"❌ 初期ロール「{init_role_name}」がサーバーにありません。先に `-setup-ranks` を実行してください。")
-
-    status_msg = await ctx.send(f"🔄 @MC メンバー（{len(mc_role.members)}人）の初期化と「B0-T0」ロールの付与を開始します...")
-    success_count = 0
-
-    for member in mc_role.members:
-        # 今後の拡張（クエストや一時ポイント）を見据えて、DB側に初期ステータスを作成/上書き
-        rank_collection.update_one(
-            {'user_id': str(member.id)},
-            {'$set': {
-                'b_points': 0,
-                't_points': 0,
-                'b_rank': 0,
-                't_rank': 0,
-                'temporary_rates': [] # 将来の「消失期限つきポイント」格納用
-            }},
-            upsert=True
-        )
-
-        # メンバーにB0-T0ロールがまだ無ければ付与
-        if target_role not in member.roles:
-            try:
-                await member.add_roles(target_role, reason="ランクシステム初期化")
-                success_count += 1
-                await asyncio.sleep(0.2) # API制限対策
-            except Exception as e:
-                print(f"ロール付与失敗 [{member.display_name}]: {e}")
-
-    await status_msg.edit(content=f"✅ 初期化が完了しました！\n・対象MCメンバー: {len(mc_role.members)}人\n・ロールを新しく付与した人数: {success_count}人\n・全員の初期DBデータを構築しました。")
-
-@bot.command(name="update-ranking")
-@commands.has_permissions(administrator=True)
-async def manual_update_ranking(ctx):
+@bot.tree.command(name="_update_ranking", description="【管理者】SPランキングチャンネルを強制手動更新します")
+@app_commands.default_permissions(administrator=True)
+async def manual_update_ranking_slash(interaction: discord.Interaction):
     await update_ranking_message()
-    await ctx.send("✅ SPランキングチャンネルを強制更新しました。")
+    await interaction.response.send_message("✅ SPランキングチャンネルを強制更新しました。")
 
-@bot.command(name="bonus")
-@commands.has_permissions(administrator=True)
-async def manual_bonus(ctx, member: discord.Member):
+@bot.tree.command(name="_bonus", description="【管理者】指定したユーザーにランダムなボーナスSPを即時付与します")
+@app_commands.default_permissions(administrator=True)
+@app_commands.describe(member="対象ユーザー")
+async def manual_bonus_slash(interaction: discord.Interaction, member: discord.Member):
     amount = random.randint(50, 100)
     add_user_balance(member.id, amount)
     await update_ranking_message()
     new_balance = get_user_balance(member.id)
-    await ctx.send(
+    await interaction.response.send_message(
         f"🎁 {member.mention} さんにボーナスを付与しました！\n付与額: **{amount} SP**\n現在の所持金: **{new_balance} SP**",
         allowed_mentions=discord.AllowedMentions.none()
     )
 
-@bot.command(name="join")
-@commands.has_permissions(administrator=True)
-async def join_vc(ctx):
+@bot.tree.command(name="_join", description="【管理者】Botをサイファー用ボイスチャンネルに接続させます")
+@app_commands.default_permissions(administrator=True)
+async def join_vc_slash(interaction: discord.Interaction):
     vc_channel = bot.get_channel(CIPHER_VC_ID)
-    if not vc_channel: return await ctx.send("VCが見つかりません。")
-    if ctx.guild.voice_client: await ctx.guild.voice_client.move_to(vc_channel)
+    if not vc_channel: return await interaction.response.send_message("VCが見つかりません。", ephemeral=True)
+    if interaction.guild.voice_client: await interaction.guild.voice_client.move_to(vc_channel)
     else: await vc_channel.connect()
-    await ctx.send("サイファーVCに入室しました！🎤")
+    await interaction.response.send_message("サイファーVCに入室しました！🎤")
 
-@bot.command(name="leave")
-@commands.has_permissions(administrator=True)
-async def leave_vc(ctx):
-    if ctx.guild.voice_client:
-        await ctx.guild.voice_client.disconnect()
-        await ctx.send("退室しました。👋")
+@bot.tree.command(name="_leave", description="【管理者】Botを参加中のボイスチャンネルから切断させます")
+@app_commands.default_permissions(administrator=True)
+async def leave_vc_slash(interaction: discord.Interaction):
+    if interaction.guild.voice_client:
+        await interaction.guild.voice_client.disconnect()
+        await interaction.response.send_message("退室しました。👋")
+    else:
+        await interaction.response.send_message("Botはボイスチャンネルに参加していません。", ephemeral=True)
 
-@bot.command(name="add")
-@commands.has_permissions(administrator=True)
-async def add_sp(ctx, member: discord.Member, amount: int):
+@bot.tree.command(name="_add", description="【管理者】指定したユーザーに指定額のSPを付与（加算）します")
+@app_commands.default_permissions(administrator=True)
+@app_commands.describe(member="対象ユーザー", amount="付与する額（SP）")
+async def add_sp_slash(interaction: discord.Interaction, member: discord.Member, amount: int):
     add_user_balance(member.id, amount)
     await update_ranking_message()
-    await ctx.send(f"{member.display_name}に **{amount} SP** 付与しました。")
+    await interaction.response.send_message(f"{member.display_name}に **{amount} SP** 付与しました。")
 
-@bot.command(name="bulk-remove")
-@commands.has_permissions(administrator=True)
-async def bulk_remove(ctx, *, words_str: str):
+@bot.tree.command(name="_set", description="【管理者】指定したユーザーのSP残高を指定した値に直接上書き変更します")
+@app_commands.default_permissions(administrator=True)
+@app_commands.describe(member="対象ユーザー", amount="変更後の残高（SP）")
+async def set_sp_slash(interaction: discord.Interaction, member: discord.Member, amount: int):
+    set_user_balance(member.id, amount)
+    await update_ranking_message()
+    await interaction.response.send_message(f"{member.display_name}の所持金を **{amount} SP** に設定しました。")
+
+@bot.tree.command(name="_bulk_remove", description="【管理者】ワードバトルの辞書から複数の単語を空白区切りで一括削除します")
+@app_commands.default_permissions(administrator=True)
+@app_commands.describe(words_str="削除したい単語（半角スペース区切りで複数入力可）")
+async def bulk_remove_slash(interaction: discord.Interaction, words_str: str):
     words_to_delete = words_str.split()
     result = word_collection.delete_many({'word': {'$in': words_to_delete}})
-    await ctx.send(f"{result.deleted_count} 個の単語を削除しました。")
+    await interaction.response.send_message(f"{result.deleted_count} 個の単語を削除しました。")
 
-@bot.command(name="dislogin")
-@commands.has_permissions(administrator=True)
-async def dislogin(ctx, member: discord.Member):
+@bot.tree.command(name="_dislogin", description="【管理者】指定したユーザーの今日のデイリー獲得フラグを削除します")
+@app_commands.default_permissions(administrator=True)
+@app_commands.describe(member="対象ユーザー")
+async def dislogin_slash(interaction: discord.Interaction, member: discord.Member):
     remove_rewarded_user(member.id)
-    await ctx.send(f"{member.display_name}のデイリー記録を削除しました。")
+    await interaction.response.send_message(f"{member.display_name}のデイリー記録を削除しました。")
 
-@bot.command(name="readingbeat")
-@commands.has_permissions(administrator=True)
-async def readingbeat(ctx):
+@bot.tree.command(name="_readingbeat", description="【管理者】YouTube再生リストからビートのURLをリロードしてキャッシュを更新します")
+@app_commands.default_permissions(administrator=True)
+async def readingbeat_slash(interaction: discord.Interaction):
     global cached_beats
-    status_msg = await ctx.send("🔄 YouTube再生リストを読み込み中... しばらくお待ちください。")
+    await interaction.response.defer()
     try:
         new_beats = await asyncio.to_thread(get_playlist_urls, PLAYLIST_URL)
         if new_beats:
             cached_beats = new_beats
-            await status_msg.edit(content=f"✅ リロード完了！ {len(cached_beats)}件のビートを読み込みました。")
+            await interaction.followup.send(f"✅ リロード完了！ {len(cached_beats)}件のビートを読み込みました。")
         else:
-            await status_msg.edit(content="⚠️ リストが空、または取得に失敗しました。URLを確認してください。")
+            await interaction.followup.send("⚠️ リストが空、または取得に失敗しました。URLを確認してください。")
     except Exception as e:
         print(f"Reload Error: {e}")
-        await status_msg.edit(content="❌ エラーが発生しました。ログを確認してください。")
+        await interaction.followup.send("❌ エラーが発生しました。ログを確認してください。")
 
-@bot.group(name="task", invoke_without_command=True)
-@commands.has_permissions(administrator=True)
-async def task_group(ctx):
-    await ctx.send("サブコマンドを指定してください: `add`, `edit`, `delete`, `done`, `notice`, `list`")
 
-@task_group.command(name="add")
-async def task_add(ctx, *, args: str):
-    target_ids = get_target_user_ids(ctx)
-    if not target_ids: return await ctx.send("エラー: 対象（ユーザーまたはロール）をメンションで指定してください。")
-    tokens = args.split()
-    task_name, deadline, description_tokens = None, None, []
-    for t in tokens:
-        if re.match(r'^<@!?\d+>$|^<@&\d+>$|^<#\d+>$', t): continue
-        elif not task_name: task_name = t
-        elif re.match(r'^\d{1,2}/\d{1,2}$|^\d{1,2}-\d{1,2}$', t) and not deadline: deadline = t
-        else: description_tokens.append(t)
-    if not task_name: return await ctx.send("タスク名を指定してください。")
-    description = " ".join(description_tokens)
-    doc = task_collection.find_one({"task_name": task_name})
-    if doc:
-        task_collection.update_one({"task_name": task_name}, {"$addToSet": {"assignees": {"$each": [str(uid) for uid in target_ids]}}})
-        updates = {}
-        if description: updates["description"] = description
-        if deadline: updates["deadline"] = deadline
-        if updates: task_collection.update_one({"task_name": task_name}, {"$set": updates})
-    else:
-        task_collection.insert_one({"task_name": task_name, "description": description, "deadline": deadline, "assignees": [str(uid) for uid in target_ids]})
-    dl_text = f" (期限: {deadline})" if deadline else ""
-    await ctx.send(f"タスク `{task_name}`{dl_text} を追加/更新しました！ 対象: {len(target_ids)}人")
-
-@task_group.command(name="edit")
-async def task_edit(ctx, task_name: str, *, new_desc: str):
-    result = task_collection.update_one({"task_name": task_name}, {"$set": {"description": new_desc}})
-    if result.matched_count: await ctx.send(f"タスク `{task_name}` の説明を更新しました。")
-    else: await ctx.send(f"タスク `{task_name}` が見つかりません。")
-
-@task_group.command(name="delete")
-async def task_delete(ctx, *, args: str):
-    target_ids = get_target_user_ids(ctx)
-    text_tokens = [t for t in args.split() if not re.match(r'^<@!?\d+>$|^<@&\d+>$|^<#\d+>$', t)]
-    task_name = text_tokens[0] if text_tokens else None
-    if task_name and target_ids:
-        task_collection.update_one({"task_name": task_name}, {"$pull": {"assignees": {"$in": [str(uid) for uid in target_ids]}}})
-        await ctx.send(f"指定されたユーザーからタスク `{task_name}` を外しました。")
-    elif task_name and not target_ids:
-        task_collection.delete_one({"task_name": task_name})
-        await ctx.send(f"タスク `{task_name}` を完全に削除しました。")
-    elif not task_name and target_ids:
-        task_collection.update_many({}, {"$pull": {"assignees": {"$in": [str(uid) for uid in target_ids]}}})
-        await ctx.send(f"指定されたユーザーが抱えているすべてのタスクを削除しました。")
-    else: return await ctx.send("タスク名か対象メンションの少なくとも一方を指定してください。")
-    task_collection.delete_many({"assignees": {"$size": 0}})
-
-@task_group.command(name="done")
-async def task_done(ctx, *, args: str):
-    target_ids = get_target_user_ids(ctx)
-    channel_mentions = ctx.message.channel_mentions
-    notify_channel = channel_mentions[0] if channel_mentions else ctx.channel
-    text_tokens = [t for t in args.split() if not re.match(r'^<@!?\d+>$|^<@&\d+>$|^<#\d+>$', t)]
-    if not text_tokens: return await ctx.send("タスク名を指定してください。")
-    task_name = text_tokens.pop(0)
-    reward = next((int(t) for t in text_tokens if t.isdigit() and len(t) < 7), 0)
-    if not target_ids: return await ctx.send("対象をメンションで指定してください。")
-
-    task_collection.update_one({"task_name": task_name}, {"$pull": {"assignees": {"$in": [str(uid) for uid in target_ids]}}})
-    task_collection.delete_many({"assignees": {"$size": 0}}) 
-
-    if reward > 0:
-        for uid in target_ids: add_user_balance(uid, reward)
-        await update_ranking_message()
-
-    now = datetime.datetime.now(JST)
-    is_active_time = 8 <= now.hour < 22
-    target_mentions = " ".join([f"<@{uid}>" for uid in target_ids])
-    reward_text = f"\n💰 **{reward} SP** の報酬が付与されました！" if reward > 0 else ""
-    msg = f"✅ **タスク完了**\n{target_mentions} さん、タスク `{task_name}` 完了を確認しました{reward_text}"
-
-    if is_active_time:
-        sent_msg = await notify_channel.send(msg)
-        register_deletion(sent_msg.id, sent_msg.channel.id)
-        await ctx.send(f"タスク完了処理を実施し、{notify_channel.mention} へ通知しました。")
-    else:
-        notice_collection.insert_one({"channel_id": notify_channel.id, "message": msg})
-        await ctx.send(f"タスク完了処理を実施しました。時間外のため、明日の朝9時に {notify_channel.mention} へ通知します。")
-
-@task_group.command(name="notice")
-async def task_notice(ctx, *, args: str=""):
-    target_ids = get_target_user_ids(ctx)
-    channel_mentions = ctx.message.channel_mentions
-    notify_channel = channel_mentions[0] if channel_mentions else ctx.channel
-    text_tokens = [t for t in args.split() if not re.match(r'^<@!?\d+>$|^<@&\d+>$|^<#\d+>$', t)]
-    task_name = text_tokens[0] if text_tokens else None
-    messages = []
-    if task_name:
-        task = task_collection.find_one({"task_name": task_name})
-        if task and task['assignees']:
-            mentions = " ".join([f"<@{uid}>" for uid in task['assignees']])
-            dl = f" (期限: {task['deadline']})" if task.get('deadline') else ""
-            messages.append(f"🔔 **リマインド**: `{task_name}`{dl}\n{mentions}\n> {task.get('description', '')}")
-    elif target_ids:
-        for uid in target_ids:
-            tasks = list(task_collection.find({"assignees": str(uid)}))
-            if tasks:
-                task_lines = [f"・`{t['task_name']}`" + (f"(期限:{t['deadline']})" if t.get('deadline') else "") for t in tasks]
-                messages.append(f"🔔 <@{uid}> さんの抱えているタスク:\n" + "\n".join(task_lines))
-    if not messages: return await ctx.send("通知する対象やタスクが見つかりませんでした。")
-    for m in messages: 
-        sent_msg = await notify_channel.send(m)
-        register_deletion(sent_msg.id, sent_msg.channel.id)
-    await ctx.send(f"{notify_channel.mention} に通知を送信しました。")
-
-@task_group.command(name="list")
-async def task_list(ctx, *, args: str=""):
-    target_ids = get_target_user_ids(ctx)
-    text_tokens = [t for t in args.split() if not re.match(r'^<@!?\d+>$|^<@&\d+>$|^<#\d+>$', t)]
-    task_name = text_tokens[0] if text_tokens else None
-    embed = discord.Embed(title="📋 タスク一覧", color=discord.Color.blue())
-    if task_name:
-        task = task_collection.find_one({"task_name": task_name})
-        if not task: return await ctx.send("タスクが見つかりません。")
-        mentions = " ".join([f"<@{uid}>" for uid in task['assignees']])
-        dl = f" (期限: {task['deadline']})" if task.get('deadline') else ""
-        embed.add_field(name=f"{task['task_name']}{dl}", value=f"担当: {mentions}\n説明: {task.get('description', 'なし')}")
-    elif target_ids:
-        uid = str(target_ids[0])
-        tasks = list(task_collection.find({"assignees": uid}))
-        if not tasks: return await ctx.send("対象者はタスクを持っていません。")
-        val = "".join([f"・**{t['task_name']}**" + (f" (期限:{t['deadline']})" if t.get('deadline') else "") + "\n" for t in tasks])
-        embed.add_field(name=f"<@{uid}> さんのタスク", value=val)
-    else:
-        tasks = list(task_collection.find())
-        if not tasks: return await ctx.send("現在登録されているタスクはありません。")
-        for t in tasks:
-            dl = f" [期限:{t['deadline']}]" if t.get('deadline') else ""
-            embed.add_field(name=f"{t['task_name']}{dl}", value=f"担当者: {len(t['assignees'])}人", inline=False)
-    await ctx.send(embed=embed)
-
-# --- 10. スラッシュコマンド (一般) ---
+# --- 10. スラッシュコマンド (一般ユーザー用・完全維持) ---
 cached_beats = []
 
 @bot.event
@@ -598,6 +599,14 @@ async def on_ready():
     cached_beats = await asyncio.to_thread(get_playlist_urls, PLAYLIST_URL)
     print(f"{len(cached_beats)}件のビートを読み込みました！")
     await update_ranking_message()
+    
+    # 起動時にコマンドを特定のギルドに即時反映
+    try:
+        guild = discord.Object(id=ALLOWED_GUILD_ID)
+        await bot.tree.sync(guild=guild)
+        print("ギルド専用スラッシュコマンドの同期に成功しました。")
+    except Exception as e:
+        print(f"初期同期エラー: {e}")
 
 @bot.tree.command(name="beat", description="再生リストからランダムにビートを選択します")
 async def beat(interaction: discord.Interaction):
@@ -619,7 +628,7 @@ async def gamerule(interaction: discord.Interaction):
         turn_options = ['8×2', '8×3', '8×4', '16×2', '32×2', '45s×2', '60s×2']
         turn_weights = [10, 20, 30, 20, 4, 8, 8]
     selected_turn = random.choices(turn_options, weights=turn_weights)[0]
-    await interaction.response.send_message(f"BPM：**{selected_bpm}**　TURN：**{selected_turn}**")
+    await interaction.response.send_message(f"BPM：**{selected_bpm}** TURN：**{selected_turn}**")
 
 @bot.tree.command(name="vote", description="先攻と後攻の投票パネルを作成します")
 @app_commands.describe(first="先攻の名前", second="後攻の名前")
@@ -699,6 +708,7 @@ async def my_task(interaction: discord.Interaction):
         desc = t.get('description', '')
         embed.add_field(name=f"📌 {t['task_name']}{dl}", value=f"・{desc}" if desc else "（詳細説明なし）", inline=False)
     await interaction.response.send_message(embed=embed, ephemeral=True)
+
 
 # --- 11. 起動 ---
 if __name__ == "__main__":
