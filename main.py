@@ -31,6 +31,7 @@ ANNOUNCE_CHANNEL_ID = 1492856858078220542
 CIPHER_VC_ID = 1480212977650110828
 DJ_BOOTH_CHANNEL_ID = 1492856858078220542
 RANKING_CHANNEL_ID = 1511865035578933278 
+B_RANK_GUIDE_CHANNEL_ID = 1512171832512352396  # B軸ランク基準チャンネル
 
 task_collection = db['tasks']
 notice_collection = db['pending_notices']
@@ -158,6 +159,77 @@ async def update_ranking_message():
             await message.edit(content=ranking_text, allowed_mentions=discord.AllowedMentions.none())
             return
     await channel.send(content=ranking_text, allowed_mentions=discord.AllowedMentions.none())
+
+
+# --- 3.5 B軸ランクポイント基準テキスト作成と更新ロジック ---
+def get_b_rank_guide_text():
+    return (
+        "⚔️ **B軸（バトル）ランク判定 レートポイント基準** ⚔️\n\n"
+        "各大会やイベントでの実績に応じて、B軸のランクを決定する「レートポイント（p）」が付与されます。\n"
+        "💡 **ポイントには有効期限があります！** 期限が切れたポイントは自動的に消失します。\n\n"
+        "----------------------------------------\n\n"
+        "### 🎙️ 常設・サイファー\n"
+        "・声覇のサイファーに参加：**5p** 【有効期限：1ヶ月】\n\n"
+        "### 🏆 【カテゴリ：声覇大会】 【有効期限：3ヶ月】\n"
+        "・声覇の草大会・大会参加：**20p**\n"
+        "▼ **トーナメント大会の場合**\n"
+        " ・一回戦・シード戦突破：**+10p**\n"
+        " ・２回戦以降突破：**+30p**\n"
+        " ・決勝進出：**+50p**\n"
+        " ・優勝：**+60p**\n"
+        "▼ **総当たり大会の場合**\n"
+        " ・一勝ごとに：**+30p** / 1敗ごとに：**-10p** （※0点以下にはなりません）\n"
+        " ・優勝：**+50p**\n\n"
+        "### 🌐 【カテゴリ：ネット草大会（賞金・賞品の出ないもの）】 【有効期限：6ヶ月】\n"
+        "・草大会参加：**25p**\n"
+        "▼ **トーナメント大会の場合**\n"
+        " ・一回戦・シード戦突破：**+15p**\n"
+        " ・２回戦以降突破：**+35p**\n"
+        " ・決勝進出：**+55p**\n"
+        " ・優勝：**+65p**\n"
+        "▼ **総当たり大会の場合**\n"
+        " ・一勝ごとに：**+35p** / 1敗ごとに：**-10p** （※0点以下にはなりません）\n"
+        " ・優勝：**+55p**\n\n"
+        "### 💎 【カテゴリ：ネット本戦（賞金・賞品の出るもの）】 【有効期限：6ヶ月】\n"
+        "・大会参加：**25p**\n"
+        " ・一回戦・シード戦突破：**+20p**\n"
+        " ・２回戦以降突破：**+40p**\n"
+        " ・決勝進出：**+60p**\n"
+        " ・優勝：**+70p**\n\n"
+        "### 🏟️ 【カテゴリ：リアルイベント系大会】 【有効期限：1年】\n"
+        "・大会参加：**30p**\n"
+        " ・一回戦・シード戦突破：**+30p**\n"
+        " ・２回戦以降突破：**+50p**\n"
+        " ・決勝進出：**+70p**\n"
+        " ・優勝：**+90p**\n\n"
+        "### 🗺️ 【カテゴリ：現場予選大会】 【有効期限：1年】\n"
+        "・大会参加：**40p**\n"
+        " ・プレ予選突破：**+20p**\n"
+        " ・一回戦・シード戦突破：**+40p**\n"
+        " ・２回戦以降突破：**+60p**\n"
+        " ・決勝進出：**+80p**\n"
+        " ・優勝：**+100p**\n\n"
+        "### 👑 【カテゴリ：現場本戦大会、最大大会】 【有効期限：3年】\n"
+        "・大会参加：**100p**\n"
+        " ・一回戦・シード戦突破：**+100p**\n"
+        " ・２回戦以降突破：**+150p**\n"
+        " ・決勝進出：**+200p**\n"
+        " ・優勝：**+300p**\n\n"
+        "----------------------------------------\n"
+        "※この基準表は随時更新されます。"
+    )
+
+async def update_b_rank_guide_message():
+    channel = bot.get_channel(B_RANK_GUIDE_CHANNEL_ID)
+    if not channel:
+        print("エラー: B軸ランク基準チャンネルが見つかりません。")
+        return
+    guide_text = get_b_rank_guide_text()
+    async for message in channel.history(limit=10):
+        if message.author == bot.user:
+            await message.edit(content=guide_text, allowed_mentions=discord.AllowedMentions.none())
+            return
+    await channel.send(content=guide_text, allowed_mentions=discord.AllowedMentions.none())
 
 
 # --- 4. Webサーバー (Render/Keep-alive用) ---
@@ -356,7 +428,7 @@ async def run_cipher_logic(end_datetime):
 
     if channel:
         menus = ["**16小節サイファー**", "**2小節サイファー**", "**バトル**"]
-        message = f"ラップの練習のお時間です！ <#{CIPHER_VC_ID}> に集まれ！🔥\n練習メニュー案：{random.choice(menus)}"
+        message = f"ラップ of 練習のお時間です！ <#{CIPHER_VC_ID}> に集まれ！🔥\n練習メニュー案：{random.choice(menus)}"
         await channel.send(message)
 
     voice_active_minutes.clear()
@@ -421,6 +493,7 @@ async def daily_cipher_task():
 async def midnight_ranking_task():
     await bot.wait_until_ready()
     await update_ranking_message()
+    await update_b_rank_guide_message()  # 深夜にも基準メッセージを同期更新
     
     # 【自動処理】@MCロールを保持し、ランクを1つも持っていない人にB0-T0を自動付与
     guild = bot.get_guild(ALLOWED_GUILD_ID)
@@ -436,12 +509,10 @@ async def midnight_ranking_task():
         return
 
     for member in mc_role.members:
-        # 正規表現を使い、既に「B○-T○」から始まるランク系ロールを1つでも持っているか判定
         has_rank = any(re.match(r"^B[0-7]-T[0-7]", role.name) for role in member.roles)
         
         if not has_rank:
             try:
-                # DB情報を初期化 ($setOnInsertにより既存の別データがあれば上書きしない)
                 rank_collection.update_one(
                     {'user_id': str(member.id)},
                     {'$setOnInsert': {
@@ -452,9 +523,8 @@ async def midnight_ranking_task():
                     upsert=True
                 )
                 
-                # B0-T0ロールをメンバーへ自動付与
                 await member.add_roles(init_role, reason="深夜の未ランクMCメンバーへの自動割り当て")
-                await asyncio.sleep(0.3) # APIレートリミット（負荷）対策
+                await asyncio.sleep(0.3)
                 print(f"【自動ランク付与】 {member.display_name} へ {init_role_name} を自動適用しました。")
             except Exception as e:
                 print(f"自動ランク付与失敗 [{member.display_name}]: {e}")
@@ -491,16 +561,21 @@ async def auto_delete_task():
         delete_collection.delete_one({"_id": doc["_id"]})
 
 
-# --- 9. 管理者用コマンド (【最重要】救済用のテキストコマンド) ---
+# --- 9. 管理者用コマンド (【最重要】救済・更新用のテキストコマンド) ---
 
 @bot.command(name="sync")
 @commands.has_permissions(administrator=True)
 async def sync_commands(ctx):
-    """【救済用】チャット欄に「-sync」と打つことでスラッシュコマンドを強制復活させます"""
+    """【救済用】チャット欄に「-sync」と打つことで各種メッセージの更新とコマンド強制同期を行います"""
     guild = discord.Object(id=ALLOWED_GUILD_ID)
     bot.tree.copy_global_to(guild=guild)
     await bot.tree.sync(guild=guild)
-    await ctx.send("✅ スラッシュコマンドをサーバーに強制同期しました！Discordアプリを一度 `Ctrl + R`（スマホはアプリ再起動）でリロードすると、全ての `/` コマンドが復活します。")
+    
+    # 基準案内文とランキング表示の強制上書き
+    await update_b_rank_guide_message()
+    await update_ranking_message()
+    
+    await ctx.send("✅ スラッシュコマンドの同期、および各種固定メッセージ（B軸ランク基準・SPランキング）の強制上書き更新が完了しました！")
 
 
 # --- 9.5 管理者用スラッシュコマンド (プレフィックス「z_」) ---
@@ -600,9 +675,11 @@ async def on_ready():
     print("ビートリストを読み込み中...")
     cached_beats = await asyncio.to_thread(get_playlist_urls, PLAYLIST_URL)
     print(f"{len(cached_beats)}件のビートを読み込みました！")
-    await update_ranking_message()
     
-    # 起動時にコマンドを特定のギルドに自動同期
+    # 起動時に固定メッセージを自動構築・更新
+    await update_ranking_message()
+    await update_b_rank_guide_message()
+    
     try:
         guild = discord.Object(id=ALLOWED_GUILD_ID)
         bot.tree.copy_global_to(guild=guild)
