@@ -542,13 +542,16 @@ POINT_TABLE_B = {
 }
 
 # 3. コマンド本体
+B_RATING_NOTIFY_CHANNEL_ID = 1512173148030767255  # 通知先のチャンネルID
+
 @bot.tree.command(name="z_rating_b", description=msg.DESC_Z_RATING_B)
 @app_commands.describe(
     mc="レートが上がる対象のユーザー",
     event="イベント名（自由入力）",
     when="開催日（YYYYMMDDの8桁 例: 20260605）",
     category="イベントのカテゴリ",
-    result="結果（p, s, d, f, v, l で指定。例: ssdl）"
+    result="結果（p, s, d, f, v, l で指定。例: ssdl）",
+    result_how="結果の自由な説明（例: ベスト8、優勝 など）"
 )
 @app_commands.choices(category=RATING_B_CATEGORIES)
 @app_commands.default_permissions(administrator=True)
@@ -558,9 +561,10 @@ async def z_rating_b_slash(
     event: str, 
     when: str,
     category: str, 
-    result: str
+    result: str,
+    result_how: str
 ):
-    # 開催日(when)のバリデーションとパース
+    # 1. 開催日(when)のバリデーション
     if len(when) != 8 or not when.isdigit():
         return await interaction.response.send_message(msg.MSG_RATING_B_ERR_DATE, ephemeral=True)
     
@@ -569,31 +573,42 @@ async def z_rating_b_slash(
     except ValueError:
         return await interaction.response.send_message(msg.MSG_RATING_B_ERR_DATE, ephemeral=True)
 
-    # 結果文字列のバリデーション
+    # 2. 結果文字列のバリデーション
     valid_chars = set("psdfvl")
     result_lower = result.lower()
     if not all(char in valid_chars for char in result_lower):
         return await interaction.response.send_message(msg.MSG_RATING_B_ERR_RESULT, ephemeral=True)
         
-    # ポイント計算
+    # 3. 今回の獲得ポイントと有効期限の計算
     table = POINT_TABLE_B[category]
     gained_points = table["base"]
-    
     for char in result_lower:
         gained_points += table.get(char, 0)
         
-    # 有効期限の計算（開催日を基準）
     months_to_add = table["exp_months"]
     new_month = event_date.month - 1 + months_to_add
     expire_year = event_date.year + new_month // 12
     expire_month = new_month % 12 + 1
-    
     _, last_day = calendar.monthrange(expire_year, expire_month)
     expire_day = min(event_date.day, last_day)
     expire_date = event_date.replace(year=expire_year, month=expire_month, day=expire_day)
     
-    # データベースへの記録
+    # 4. 現在のDB情報をもとに、既存の「有効ポイント」と「ランク」を計算
     now = datetime.datetime.now(JST)
+    user_doc = rank_collection.find_one({'user_id': str(mc.id)}) or {'b_points': 0, 't_points': 0, 'b_rank': 0, 't_rank': 0, 'temporary_rates': []}
+    
+    old_valid_total = 0
+    active_rates = []
+    
+    for record in user_doc.get('temporary_rates', []):
+        if record['expire_at'] > now:
+            old_valid_total += record['points']
+            active_rates.append(record)
+            
+    old_b_rank = calculate_rank_level(old_valid_total)
+    t_rank = user_doc.get('t_rank', 0) # T軸のランクはそのまま引き継ぐ
+    
+    # 5. 新しいレコードを追加した後の「新ポイント」と「新ランク」を計算
     rate_record = {
         "event": event,
         "category": category,
@@ -603,42 +618,79 @@ async def z_rating_b_slash(
         "granted_at": now,
         "expire_at": expire_date
     }
+    active_rates.append(rate_record)
     
-    rank_collection.update_one(
-        {'user_id': str(mc.id)}, 
-        {'$setOnInsert': {'b_points': 0, 't_points': 0, 'b_rank': 0, 't_rank': 0, 'temporary_rates': []}},
-        upsert=True
-    )
+    new_valid_total = old_valid_total + gained_points
+    new_b_rank = calculate_rank_level(new_valid_total)
     
-    rank_collection.update_one(
-        {'user_id': str(mc.id)},
-        {'$push': {'temporary_rates': rate_record}}
-    )
-    
-    # 有効な合計ポイントの再計算
-    user_doc = rank_collection.find_one({'user_id': str(mc.id)})
-    valid_total = 0
-    active_rates = []
-    
-    for record in user_doc.get('temporary_rates', []):
-        if record['expire_at'] > now:
-            valid_total += record['points']
-            active_rates.append(record)
-            
+    # DBをまとめて上書き更新
     rank_collection.update_one(
         {'user_id': str(mc.id)},
         {
             '$set': {
-                'b_points': valid_total,
+                'b_points': new_valid_total,
+                'b_rank': new_b_rank,
                 'temporary_rates': active_rates
             }
-        }
+        },
+        upsert=True
     )
-    
-    # 結果の送信
+
+    # 6. 通知メッセージの作成
+    notify_text = msg.MSG_RATING_ANNOUNCE_BASE.format(
+        mention=mc.mention,
+        event=event,
+        result_how=result_how,
+        old_points=old_valid_total,
+        new_points=new_valid_total
+    )
+
+    # 7. ランクの変動（ロールの付け替え）処理
+    if old_b_rank != new_b_rank:
+        guild = interaction.guild
+        old_role_name = f"B{old_b_rank}-T{t_rank} {B_NAMES[old_b_rank]}_{T_NAMES[t_rank]}"
+        new_role_name = f"B{new_b_rank}-T{t_rank} {B_NAMES[new_b_rank]}_{T_NAMES[t_rank]}"
+        
+        old_role = discord.utils.get(guild.roles, name=old_role_name)
+        new_role = discord.utils.get(guild.roles, name=new_role_name)
+        
+        # 新しいロールが存在しない場合はBotに自動作成させる
+        if not new_role:
+            try:
+                new_role = await guild.create_role(name=new_role_name, reason="ランクアップのため自動生成")
+            except Exception as e:
+                print(f"Role creation failed: {e}")
+
+        # ロールの剥奪と付与
+        if old_role in mc.roles:
+            try:
+                await mc.remove_roles(old_role)
+            except: pass
+            
+        if new_role:
+            try:
+                await mc.add_roles(new_role)
+            except: pass
+
+        # メンション用文字列の作成（ロールが無い場合は単なるテキストにする安全対策）
+        old_role_str = old_role.mention if old_role else f"`{old_role_name}`"
+        new_role_str = new_role.mention if new_role else f"`{new_role_name}`"
+        
+        # ランク変動文をメッセージに継ぎ足す
+        notify_text += msg.MSG_RATING_ANNOUNCE_RANK.format(
+            old_role=old_role_str,
+            new_role=new_role_str
+        )
+
+    # 8. 指定チャンネルへ送信 ＆ 実行した管理者へレスポンス
+    notify_channel = bot.get_channel(B_RATING_NOTIFY_CHANNEL_ID)
+    if notify_channel:
+        await notify_channel.send(notify_text)
+
+    # 管理者用ログ（成功の証）
     event_str = event_date.strftime("%Y/%m/%d")
     expire_str = expire_date.strftime("%Y/%m/%d")
-    res_text = msg.MSG_RATING_B_SUCCESS.format(
+    admin_log = msg.MSG_RATING_B_SUCCESS.format(
         mention=mc.mention,
         event=event,
         event_date=event_str,
@@ -646,14 +698,10 @@ async def z_rating_b_slash(
         result=result,
         points=gained_points,
         expire_date=expire_str,
-        total_points=valid_total
-    )
+        total_points=new_valid_total
+    ) + f"\n\n📢 <#{B_RATING_NOTIFY_CHANNEL_ID}> に告知を送信しました。"
     
-    await interaction.response.send_message(res_text, allowed_mentions=discord.AllowedMentions.none())
-
-# --------------------------------------------------
-# B軸レート管理用コマンド（ここまで）
-# --------------------------------------------------
+    await interaction.response.send_message(admin_log, allowed_mentions=discord.AllowedMentions.none())
 
 # --- 10. スラッシュコマンド (一般ユーザー用) ---
 cached_beats = []
