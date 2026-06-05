@@ -564,20 +564,23 @@ async def z_rating_b_slash(
     result: str,
     result_how: str
 ):
+    # 【重要】処理に時間がかかるため、最初に3秒の制限時間を解除する（実行した管理者にのみ処理中と表示されます）
+    await interaction.response.defer(ephemeral=True)
+
     # 1. 開催日(when)のバリデーション
     if len(when) != 8 or not when.isdigit():
-        return await interaction.response.send_message(msg.MSG_RATING_B_ERR_DATE, ephemeral=True)
+        return await interaction.followup.send(msg.MSG_RATING_B_ERR_DATE)
     
     try:
         event_date = datetime.datetime.strptime(when, "%Y%m%d").replace(tzinfo=JST)
     except ValueError:
-        return await interaction.response.send_message(msg.MSG_RATING_B_ERR_DATE, ephemeral=True)
+        return await interaction.followup.send(msg.MSG_RATING_B_ERR_DATE)
 
     # 2. 結果文字列のバリデーション
     valid_chars = set("psdfvl")
     result_lower = result.lower()
     if not all(char in valid_chars for char in result_lower):
-        return await interaction.response.send_message(msg.MSG_RATING_B_ERR_RESULT, ephemeral=True)
+        return await interaction.followup.send(msg.MSG_RATING_B_ERR_RESULT)
         
     # 3. 今回の獲得ポイントと有効期限の計算
     table = POINT_TABLE_B[category]
@@ -606,7 +609,7 @@ async def z_rating_b_slash(
             active_rates.append(record)
             
     old_b_rank = calculate_rank_level(old_valid_total)
-    t_rank = user_doc.get('t_rank', 0) # T軸のランクはそのまま引き継ぐ
+    t_rank = user_doc.get('t_rank', 0)
     
     # 5. 新しいレコードを追加した後の「新ポイント」と「新ランク」を計算
     rate_record = {
@@ -654,14 +657,12 @@ async def z_rating_b_slash(
         old_role = discord.utils.get(guild.roles, name=old_role_name)
         new_role = discord.utils.get(guild.roles, name=new_role_name)
         
-        # 新しいロールが存在しない場合はBotに自動作成させる
         if not new_role:
             try:
                 new_role = await guild.create_role(name=new_role_name, reason="ランクアップのため自動生成")
             except Exception as e:
                 print(f"Role creation failed: {e}")
 
-        # ロールの剥奪と付与
         if old_role in mc.roles:
             try:
                 await mc.remove_roles(old_role)
@@ -672,22 +673,20 @@ async def z_rating_b_slash(
                 await mc.add_roles(new_role)
             except: pass
 
-        # メンション用文字列の作成（ロールが無い場合は単なるテキストにする安全対策）
         old_role_str = old_role.mention if old_role else f"`{old_role_name}`"
         new_role_str = new_role.mention if new_role else f"`{new_role_name}`"
         
-        # ランク変動文をメッセージに継ぎ足す
         notify_text += msg.MSG_RATING_ANNOUNCE_RANK.format(
             old_role=old_role_str,
             new_role=new_role_str
         )
 
-    # 8. 指定チャンネルへ送信 ＆ 実行した管理者へレスポンス
+    # 8. 指定チャンネルへ送信
     notify_channel = bot.get_channel(B_RATING_NOTIFY_CHANNEL_ID)
     if notify_channel:
         await notify_channel.send(notify_text)
 
-    # 管理者用ログ（成功の証）
+    # 9. 実行した管理者へ結果（控え）を送信
     event_str = event_date.strftime("%Y/%m/%d")
     expire_str = expire_date.strftime("%Y/%m/%d")
     admin_log = msg.MSG_RATING_B_SUCCESS.format(
@@ -701,8 +700,9 @@ async def z_rating_b_slash(
         total_points=new_valid_total
     ) + f"\n\n📢 <#{B_RATING_NOTIFY_CHANNEL_ID}> に告知を送信しました。"
     
-    await interaction.response.send_message(admin_log, allowed_mentions=discord.AllowedMentions.none())
-
+    # interaction.response.send_message から interaction.followup.send に変更
+    await interaction.followup.send(admin_log, allowed_mentions=discord.AllowedMentions.none())
+    
 # --- 10. スラッシュコマンド (一般ユーザー用) ---
 cached_beats = []
 
