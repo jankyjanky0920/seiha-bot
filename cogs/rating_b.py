@@ -15,8 +15,9 @@ from core import JST, rank_collection, calculate_rank_level, B_NAMES, T_NAMES
 
 class BRatingManagementCog(commands.Cog):
     def __init__(self, bot: commands.Bot):
-        self.bot = bot
-        self.notify_channel_id = core.B_RATING_NOTIFY_CHANNEL_ID  # core側からIDを参照
+            self.bot = bot
+            # 💡 エラーの原因だった名前を、core.pyにある正しい定数名に修正
+            self.notify_channel_id = core.B_RANK_GUIDE_CHANNEL_ID
 
     # 1. カテゴリのプルダウン選択肢
     RATING_B_CATEGORIES = [
