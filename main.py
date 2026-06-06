@@ -1,4 +1,3 @@
-# main.py
 import os
 import discord
 from discord.ext import commands
@@ -26,14 +25,14 @@ class MyBot(commands.Bot):
         super().__init__(command_prefix="-", intents=intents)
         
     async def setup_hook(self):
-        # 読み込む子ファイルのリスト（cogsフォルダの中身）
+        # 💡 読み込む子ファイルのリストに "cogs.rating_b" を追加しました
         extensions = [
             "cogs.tasks",
             "cogs.cipher",
             "cogs.economy",
-            "cogs.entertainment"
+            "cogs.entertainment",
+            "cogs.rating_b"  # 👈 ここを追加！
         ]
-        # 先ほどエラー修正したB軸ファイルを後々「cogs.rating_b」としてここに追加するだけで動くようになります
         for ext in extensions:
             await self.load_extension(ext)
 
