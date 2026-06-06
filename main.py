@@ -11,6 +11,7 @@ import random
 import asyncio
 import yt_dlp
 import re
+import calendar
 
 # ★新しく作成したメッセージ管理ファイルを読み込む
 import messages as msg
