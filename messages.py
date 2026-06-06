@@ -142,6 +142,16 @@ DESC_MY_TASK = "自分に与えられたタスクを確認します"
 # 5. レート管理（B軸）関連のメッセージ
 # ------------------------------------------
 DESC_Z_RATING_B = "【管理者】B軸の大会結果を記録し、レートポイントを付与します"
+DESC_Z_RATING_B_MC = "レートが上がる対象のユーザー"
+DESC_Z_RATING_B_EVENT = "イベント名（自由入力）"
+DESC_Z_RATING_B_WHEN = "開催日（YYYYMMDDの8桁 例: 20260605）"
+DESC_Z_RATING_B_CATEGORY = "イベントのカテゴリ"
+DESC_Z_RATING_B_RESULT = "結果（p, s, d, f, v, l で指定。例: ssdl）"
+DESC_Z_RATING_B_RESULT_HOW = "結果の自由な説明（例: ベスト8、優勝 など）"
+
+DESC_Z_SET_RATING_B = "【管理者】ユーザーのB軸レート（ポイント）を直接指定した値に書き換えます"
+DESC_Z_SET_RATING_B_MC = "レートを直接変更する対象のユーザー"
+DESC_Z_SET_RATING_B_POINTS = "設定する新しい総ポイント数（例: 150）"
 
 MSG_RATING_B_ERR_RESULT = "❌ エラー: 結果の指定に不正な文字が含まれています。「p, s, d, f, v, l」のみで入力してください。"
 MSG_RATING_B_ERR_DATE = "❌ エラー: 日付は YYYYMMDD の8桁の数字で指定してください（例: 20260605）。実在する日付かどうかも確認してください。"
