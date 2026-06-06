@@ -4,13 +4,15 @@ import discord
 from discord import app_commands
 from discord.ext import commands
 
-# 💡 前提条件：JST、rank_collection、calculate_rank_level、B_NAMES、T_NAMES、msgオブジェクトなどは
-# 既存のメインスクリプト側で定義されているものをインポート、またはグローバルから参照できる想定です。
+# 大元の定義（core.py や msg.py）から必要なオブジェクトをすべて安全に参照します
+import core
+import msg
+from core import JST, rank_collection, calculate_rank_level, B_NAMES, T_NAMES
 
 class BRatingManagementCog(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
-        self.notify_channel_id = 1512173148030767255  # 通知先のチャンネルID
+        self.notify_channel_id = core.B_RATING_NOTIFY_CHANNEL_ID  # core側からIDを参照
 
     # 1. カテゴリのプルダウン選択肢
     RATING_B_CATEGORIES = [
@@ -31,10 +33,10 @@ class BRatingManagementCog(commands.Cog):
         "現場本戦大会": {"base": 100, "p": 0, "s": 100, "d": 150, "f": 200, "v": 300, "exp_months": 36}
     }
 
-    async def _update_user_roles(self, interaction: discord.Interaction, mc: discord.Member, old_b_rank: int, new_b_rank: int, t_rank: int) -> str:
+    async def _update_user_roles(self, interaction: discord.Interaction, mc: discord.Member, old_b_rank: int, new_b_rank: int, t_rank: int):
         """ランク（Bランク）変動に伴うロールの付け替え処理を共通化"""
         if old_b_rank == new_b_rank:
-            return ""
+            return "", ""
 
         guild = interaction.guild
         old_role_name = f"B{old_b_rank}-T{t_rank} {B_NAMES[old_b_rank]}_{T_NAMES[t_rank]}"
@@ -82,9 +84,7 @@ class BRatingManagementCog(commands.Cog):
         return old_valid_total, active_rates
 
 
-    # --------------------------------------------------------------------------------
     # 1. 大会結果記録用コマンド (/z_rating_b)
-    # --------------------------------------------------------------------------------
     @app_commands.command(name="z_rating_b", description=msg.DESC_Z_RATING_B)
     @app_commands.describe(
         mc=msg.DESC_Z_RATING_B_MC,
@@ -108,7 +108,6 @@ class BRatingManagementCog(commands.Cog):
     ):
         await interaction.response.defer(ephemeral=True)
 
-        # 開催日のバリデーション
         if len(when) != 8 or not when.isdigit():
             return await interaction.followup.send(msg.MSG_RATING_B_ERR_DATE)
         
@@ -117,13 +116,11 @@ class BRatingManagementCog(commands.Cog):
         except ValueError:
             return await interaction.followup.send(msg.MSG_RATING_B_ERR_DATE)
 
-        # 結果文字列のバリデーション
         valid_chars = set("psdfvl")
         result_lower = result.lower()
         if not all(char in valid_chars for char in result_lower):
             return await interaction.followup.send(msg.MSG_RATING_B_ERR_RESULT)
             
-        # 今回獲得するポイントと有効期限の算出
         table = self.POINT_TABLE_B[category]
         gained_points = table["base"]
         for char in result_lower:
@@ -137,7 +134,6 @@ class BRatingManagementCog(commands.Cog):
         expire_day = min(event_date.day, last_day)
         expire_date = event_date.replace(year=expire_year, month=expire_month, day=expire_day)
         
-        # DBから既存レコードを読み込み集計
         now = datetime.datetime.now(JST)
         user_doc = rank_collection.find_one({'user_id': str(mc.id)}) or {'b_points': 0, 't_points': 0, 'b_rank': 0, 't_rank': 0, 'temporary_rates': []}
         
@@ -145,7 +141,6 @@ class BRatingManagementCog(commands.Cog):
         old_b_rank = calculate_rank_level(old_valid_total)
         t_rank = user_doc.get('t_rank', 0)
         
-        # 新しいレコードの組み込みと再集計
         rate_record = {
             "event": event,
             "category": category,
@@ -160,7 +155,6 @@ class BRatingManagementCog(commands.Cog):
         new_valid_total = old_valid_total + gained_points
         new_b_rank = calculate_rank_level(new_valid_total)
         
-        # DB保存
         rank_collection.update_one(
             {'user_id': str(mc.id)},
             {
@@ -173,7 +167,6 @@ class BRatingManagementCog(commands.Cog):
             upsert=True
         )
 
-        # 告知ベースメッセージの作成
         notify_text = msg.MSG_RATING_ANNOUNCE_BASE.format(
             mention=mc.mention,
             event=event,
@@ -182,7 +175,6 @@ class BRatingManagementCog(commands.Cog):
             new_points=new_valid_total
         )
 
-        # ランク変動（ロール付与・剥奪）処理
         if old_b_rank != new_b_rank:
             old_role_str, new_role_str = await self._update_user_roles(interaction, mc, old_b_rank, new_b_rank, t_rank)
             notify_text += msg.MSG_RATING_ANNOUNCE_RANK.format(
@@ -190,12 +182,10 @@ class BRatingManagementCog(commands.Cog):
                 new_role=new_role_str
             )
 
-        # 告知用チャンネルへ送信
         notify_channel = self.bot.get_channel(self.notify_channel_id)
         if notify_channel:
             await notify_channel.send(notify_text)
 
-        # 実行した管理者へのリプライ
         event_str = event_date.strftime("%Y/%m/%d")
         expire_str = expire_date.strftime("%Y/%m/%d")
         admin_log = msg.MSG_RATING_B_SUCCESS.format(
@@ -212,9 +202,7 @@ class BRatingManagementCog(commands.Cog):
         await interaction.followup.send(admin_log, allowed_mentions=discord.AllowedMentions.none())
 
 
-    # --------------------------------------------------------------------------------
     # 2. レート直接変更用コマンド (/z_rating_setb)
-    # --------------------------------------------------------------------------------
     @app_commands.command(name="z_rating_setb", description=msg.DESC_Z_SET_RATING_B)
     @app_commands.describe(
         mc=msg.DESC_Z_SET_RATING_B_MC,
@@ -227,17 +215,14 @@ class BRatingManagementCog(commands.Cog):
         now = datetime.datetime.now(JST)
         user_doc = rank_collection.find_one({'user_id': str(mc.id)}) or {'b_points': 0, 't_points': 0, 'b_rank': 0, 't_rank': 0, 'temporary_rates': []}
         
-        # 現在の有効ポイントを集計
         old_valid_total, active_rates = self._process_active_rates(user_doc, now)
         old_b_rank = calculate_rank_level(old_valid_total)
         t_rank = user_doc.get('t_rank', 0)
         
-        # 差分計算
         diff_points = points - old_valid_total
         if diff_points == 0:
             return await interaction.followup.send(f"{mc.mention} の現在のレートは既に {points} です。変更はありません。")
             
-        # 50年耐久の調整レコードを生成
         expire_date = now + datetime.timedelta(days=365 * 50)
         adjust_record = {
             "event": "管理者による直接ステータス変更",
@@ -253,7 +238,6 @@ class BRatingManagementCog(commands.Cog):
         new_valid_total = points
         new_b_rank = calculate_rank_level(new_valid_total)
         
-        # DB保存
         rank_collection.update_one(
             {'user_id': str(mc.id)},
             {
@@ -266,15 +250,12 @@ class BRatingManagementCog(commands.Cog):
             upsert=True
         )
         
-        # 直接変更の通知作成
         notify_text = f"{mc.mention} のB軸レートが管理者により手動で直接変更されました。\n{old_valid_total} → **{new_valid_total}**"
         
-        # ランク変動に伴うロールの付け替え
         if old_b_rank != new_b_rank:
             old_role_str, new_role_str = await self._update_user_roles(interaction, mc, old_b_rank, new_b_rank, t_rank)
             notify_text += f"\n\nMCのランクが以下のように変わりました。\n{old_role_str} → {new_role_str}"
             
-        # 通知の送信
         notify_channel = self.bot.get_channel(self.notify_channel_id)
         if notify_channel:
             await notify_channel.send(notify_text)
@@ -282,9 +263,7 @@ class BRatingManagementCog(commands.Cog):
         await interaction.followup.send(f"✅ {mc.mention} のレートを **{new_valid_total}** に直接変更し、告知を送信しました。")
 
 
-    # --------------------------------------------------------------------------------
     # 3. レート加算・減算設定用コマンド (/z_rating_addb)
-    # --------------------------------------------------------------------------------
     @app_commands.command(name="z_rating_addb", description="【管理者用】ユーザーのB軸レートを加算・減算します")
     @app_commands.describe(
         mc="対象のMC（メンバー）",
@@ -300,12 +279,10 @@ class BRatingManagementCog(commands.Cog):
         now = datetime.datetime.now(JST)
         user_doc = rank_collection.find_one({'user_id': str(mc.id)}) or {'b_points': 0, 't_points': 0, 'b_rank': 0, 't_rank': 0, 'temporary_rates': []}
         
-        # 現在の有効ポイントを集計
         old_valid_total, active_rates = self._process_active_rates(user_doc, now)
         old_b_rank = calculate_rank_level(old_valid_total)
         t_rank = user_doc.get('t_rank', 0)
         
-        # 50年耐久の調整レコードを生成（指定されたポイント数をそのままレコードに組み込む）
         expire_date = now + datetime.timedelta(days=365 * 50)
         adjust_record = {
             "event": "管理者によるレート手動増減",
@@ -321,7 +298,6 @@ class BRatingManagementCog(commands.Cog):
         new_valid_total = old_valid_total + points
         new_b_rank = calculate_rank_level(new_valid_total)
         
-        # DB保存
         rank_collection.update_one(
             {'user_id': str(mc.id)},
             {
@@ -334,25 +310,18 @@ class BRatingManagementCog(commands.Cog):
             upsert=True
         )
         
-        # 増減表示の記号調整
         change_str = f"+{points}" if points > 0 else f"{points}"
-        
-        # 変動通知の作成
         notify_text = f"{mc.mention} のB軸レートが管理者により手動調整されました。\n変動: `{change_str}` | {old_valid_total} → **{new_valid_total}**"
         
-        # ランク変動に伴うロールの付け替え
         if old_b_rank != new_b_rank:
             old_role_str, new_role_str = await self._update_user_roles(interaction, mc, old_b_rank, new_b_rank, t_rank)
             notify_text += f"\n\nMCのランクが以下のように変わりました。\n{old_role_str} → {new_role_str}"
             
-        # 通知の送信
         notify_channel = self.bot.get_channel(self.notify_channel_id)
         if notify_channel:
             await notify_channel.send(notify_text)
             
         await interaction.followup.send(f"✅ {mc.mention} のレートを `{change_str}` 調整し（新レート: **{new_valid_total}**）、告知を送信しました。")
 
-
-# Cogを登録するセットアップ関数
 async def setup(bot: commands.Bot):
     await bot.add_cog(BRatingManagementCog(bot))
