@@ -187,4 +187,6 @@ MSG_RATING_ANNOUNCE_BASE = """{mention}は**{event}**にて、{result_how}を果
 # {new_role} : 変更後のロールメンション
 MSG_RATING_ANNOUNCE_RANK = """
 MCのランクが以下のように変わりました。
-{old_role} → {new_role}"""
+{old_role}
+↓
+{new_role}"""
