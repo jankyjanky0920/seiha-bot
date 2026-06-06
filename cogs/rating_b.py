@@ -3,8 +3,12 @@ import calendar
 import discord
 from discord import app_commands
 from discord.ext import commands
+import sys
+import os
 
-# 大元の定義（core.py や msg.py）から必要なオブジェクトをすべて安全に参照します
+# 親ディレクトリ（ルート）を検索パスに追加して、coreやmsgを確実にインポートできるようにする
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
 import core
 import msg
 from core import JST, rank_collection, calculate_rank_level, B_NAMES, T_NAMES
