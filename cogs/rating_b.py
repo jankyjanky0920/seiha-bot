@@ -17,7 +17,7 @@ class BRatingManagementCog(commands.Cog):
     def __init__(self, bot: commands.Bot):
             self.bot = bot
             # 💡 エラーの原因だった名前を、core.pyにある正しい定数名に修正
-            self.notify_channel_id = core.B_RANK_GUIDE_CHANNEL_ID
+            self.notify_channel_id = 1512173148030767255
 
     # 1. カテゴリのプルダウン選択肢
     RATING_B_CATEGORIES = [
