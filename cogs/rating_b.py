@@ -6,11 +6,11 @@ from discord.ext import commands
 import sys
 import os
 
-# 親ディレクトリ（ルート）を検索パスに追加して、coreやmsgを確実にインポートできるようにする
+# 親ディレクトリ（ルート）を検索パスに追加
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import core
-import msg
+import messages as msg  # 💡 messages.py を 'msg' という名前でインポートします
 from core import JST, rank_collection, calculate_rank_level, B_NAMES, T_NAMES
 
 class BRatingManagementCog(commands.Cog):
