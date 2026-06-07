@@ -163,6 +163,7 @@ class TasksCog(commands.Cog):
         for t in tasks_list: embed.add_field(name=f"📌 {t['task_name']}", value=f"・{t.get('description', '')}", inline=False)
         await interaction.response.send_message(embed=embed, ephemeral=True)
 
+    # --- 上書き部分の反映箇所 ---
     @tasks.loop(time=NOTICE_TIME)
     async def send_pending_notices_task(self):
         await self.bot.wait_until_ready()
@@ -172,7 +173,13 @@ class TasksCog(commands.Cog):
             channel = self.bot.get_channel(doc['channel_id'])
             if channel:
                 try:
-                    sent_msg = await channel.send(doc['message'])
+                    # 💡 embedデータが含まれている場合はEmbedとして送信、なければ通常のテキスト送信
+                    if 'embed' in doc and doc['embed']:
+                        embed_obj = discord.Embed.from_dict(doc['embed'])
+                        sent_msg = await channel.send(embed=embed_obj)
+                    else:
+                        sent_msg = await channel.send(doc['message'])
+                        
                     register_deletion(sent_msg.id, sent_msg.channel.id)
                 except Exception: pass
             notice_collection.delete_one({"_id": doc["_id"]})
