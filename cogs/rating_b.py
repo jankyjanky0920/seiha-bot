@@ -11,7 +11,7 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import core
 import messages as msg  # 💡 messages.py を読み込み、コード内の 'msg.' をそのまま使えるようにします
-from core import JST, rank_collection, calculate_rank_level, B_NAMES, T_NAMES
+from core import JST, rank_collection, calculate_rank_level, B_NAMES, T_NAMES, notice_collection
 
 class BRatingManagementCog(commands.Cog):
     def __init__(self, bot: commands.Bot):
@@ -87,6 +87,23 @@ class BRatingManagementCog(commands.Cog):
                     record['granted_at'] = record['granted_at'].replace(tzinfo=datetime.timezone.utc).astimezone(JST)
                 active_rates.append(record)
         return old_valid_total, active_rates
+
+    async def _send_or_queue_notice(self, text: str):
+        """--- レート告知の送信・保留処理（8:00〜22:00がアクティブ） ---"""
+        now = datetime.datetime.now(JST)
+        current_hour = now.hour
+
+        # 💡 8時 〜 22時（21:59:59まで）の間なら即時通知
+        if 8 <= current_hour < 22:
+            channel = self.bot.get_channel(self.notify_channel_id)
+            if channel:
+                await channel.send(content=text)
+        else:
+            # 💡 22:00 〜 翌07:59 の時間外はDBへ保存（tasks.pyが朝9時に自動回収）
+            notice_collection.insert_one({
+                "channel_id": self.notify_channel_id,
+                "message": text
+            })
 
 
     # 1. 大会結果記録用コマンド (/z_rating_b)
@@ -187,9 +204,8 @@ class BRatingManagementCog(commands.Cog):
                 new_role=new_role_str
             )
 
-        notify_channel = self.bot.get_channel(self.notify_channel_id)
-        if notify_channel:
-            await notify_channel.send(notify_text)
+        # 💡 時間帯に応じた告知送信処理
+        await self._send_or_queue_notice(notify_text)
 
         event_str = event_date.strftime("%Y/%m/%d")
         expire_str = expire_date.strftime("%Y/%m/%d")
@@ -202,9 +218,129 @@ class BRatingManagementCog(commands.Cog):
             points=gained_points,
             expire_date=expire_str,
             total_points=new_valid_total
-        ) + f"\n\n📢 <#{self.notify_channel_id}> に告知を送信しました。"
+        ) + f"\n\n📢 <#{self.notify_channel_id}> に告知を送信（または夜間保留）しました。"
         
         await interaction.followup.send(admin_log, allowed_mentions=discord.AllowedMentions.none())
 
 
-    # 2. レート直接変更用コマンド (/z_rating_set
+    # 2. レート直接変更用コマンド (/z_rating_setb)
+    @app_commands.command(name="z_rating_setb", description=msg.DESC_Z_SET_RATING_B)
+    @app_commands.describe(
+        mc=msg.DESC_Z_SET_RATING_B_MC,
+        points=msg.DESC_Z_SET_RATING_B_POINTS
+    )
+    @app_commands.default_permissions(administrator=True)
+    async def z_rating_setb_slash(self, interaction: discord.Interaction, mc: discord.Member, points: int):
+        await interaction.response.defer(ephemeral=True)
+        
+        now = datetime.datetime.now(JST)
+        user_doc = rank_collection.find_one({'user_id': str(mc.id)}) or {'b_points': 0, 't_points': 0, 'b_rank': 0, 't_rank': 0, 'temporary_rates': []}
+        
+        old_valid_total, active_rates = self._process_active_rates(user_doc, now)
+        old_b_rank = calculate_rank_level(old_valid_total)
+        t_rank = user_doc.get('t_rank', 0)
+        
+        diff_points = points - old_valid_total
+        if diff_points == 0:
+            return await interaction.followup.send(f"{mc.mention} の現在のレートは既に {points} です。変更はありません。")
+            
+        expire_date = now + datetime.timedelta(days=365 * 50)
+        adjust_record = {
+            "event": "管理者による直接ステータス変更",
+            "category": "手動修正",
+            "event_date": now,
+            "result": "manual",
+            "points": diff_points,
+            "granted_at": now,
+            "expire_at": expire_date
+        }
+        active_rates.append(adjust_record)
+        
+        new_valid_total = points
+        new_b_rank = calculate_rank_level(new_valid_total)
+        
+        rank_collection.update_one(
+            {'user_id': str(mc.id)},
+            {
+                '$set': {
+                    'b_points': new_valid_total,
+                    'b_rank': new_b_rank,
+                    'temporary_rates': active_rates
+                }
+            },
+            upsert=True
+        )
+        
+        notify_text = f"{mc.mention} のB軸レートが管理者により手動で直接変更されました。\n{old_valid_total} → **{new_valid_total}**"
+        
+        if old_b_rank != new_b_rank:
+            old_role_str, new_role_str = await self._update_user_roles(interaction, mc, old_b_rank, new_b_rank, t_rank)
+            notify_text += f"\n\nMCのランクが以下のように変わりました。\n{old_role_str} → {new_role_str}"
+            
+        # 💡 時間帯に応じた告知送信処理
+        await self._send_or_queue_notice(notify_text)
+            
+        await interaction.followup.send(f"✅ {mc.mention} のレートを **{new_valid_total}** に直接変更し、告知を送信（または夜間保留）しました。")
+
+
+    # 3. レート加算・減算設定用コマンド (/z_rating_addb)
+    @app_commands.command(name="z_rating_addb", description="【管理者用】ユーザーのB軸レートを加算・減算します")
+    @app_commands.describe(
+        mc="対象 of MC（メンバー）",
+        points="加算（または減算）するポイント数（マイナス値も入力可）"
+    )
+    @app_commands.default_permissions(administrator=True)
+    async def z_rating_addb_slash(self, interaction: discord.Interaction, mc: discord.Member, points: int):
+        await interaction.response.defer(ephemeral=True)
+        
+        if points == 0:
+            return await interaction.followup.send("変動ポイントに 0 は指定できません。")
+
+        now = datetime.datetime.now(JST)
+        user_doc = rank_collection.find_one({'user_id': str(mc.id)}) or {'b_points': 0, 't_points': 0, 'b_rank': 0, 't_rank': 0, 'temporary_rates': []}
+        
+        old_valid_total, active_rates = self._process_active_rates(user_doc, now)
+        old_b_rank = calculate_rank_level(old_valid_total)
+        t_rank = user_doc.get('t_rank', 0)
+        
+        expire_date = now + datetime.timedelta(days=365 * 50)
+        adjust_record = {
+            "event": "管理者によるレート手動増減",
+            "category": "手動修正",
+            "event_date": now,
+            "result": "manual_add",
+            "points": points,
+            "granted_at": now,
+            "expire_at": expire_date
+        }
+        active_rates.append(adjust_record)
+        
+        new_valid_total = old_valid_total + points
+        new_b_rank = calculate_rank_level(new_valid_total)
+        
+        rank_collection.update_one(
+            {'user_id': str(mc.id)},
+            {
+                '$set': {
+                    'b_points': new_valid_total,
+                    'b_rank': new_b_rank,
+                    'temporary_rates': active_rates
+                }
+            },
+            upsert=True
+        )
+        
+        change_str = f"+{points}" if points > 0 else f"{points}"
+        notify_text = f"{mc.mention} のB軸レートが管理者により手動調整されました。\n変動: `{change_str}` | {old_valid_total} → **{new_valid_total}**"
+        
+        if old_b_rank != new_b_rank:
+            old_role_str, new_role_str = await self._update_user_roles(interaction, mc, old_b_rank, new_b_rank, t_rank)
+            notify_text += f"\n\nMCのランクが以下のように変わりました。\n{old_role_str} → {new_role_str}"
+            
+        # 💡 時間帯に応じた告知送信処理
+        await self._send_or_queue_notice(notify_text)
+            
+        await interaction.followup.send(f"✅ {mc.mention} のレートを `{change_str}` 調整し（新レート: **{new_valid_total}**）、告知を送信（または夜間保留）しました。")
+
+async def setup(bot: commands.Bot):
+    await bot.add_cog(BRatingManagementCog(bot))
