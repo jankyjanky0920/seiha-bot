@@ -45,46 +45,60 @@ class EconomyCog(commands.Cog):
     @app_commands.command(name="z_update_ranking", description=msg.DESC_Z_UPDATE_RANKING)
     @app_commands.default_permissions(administrator=True)
     async def manual_update_ranking_slash(self, interaction: discord.Interaction):
+        # 💡 タイムアウト防止のため、最初に「考え中...」にする
+        await interaction.response.defer()
         await update_ranking_message(self.bot)
-        await interaction.response.send_message("✅ 強制更新しました。")
+        await interaction.followup.send("✅ 強制更新しました。")
 
     @app_commands.command(name="z_bonus", description=msg.DESC_Z_BONUS)
     @app_commands.default_permissions(administrator=True)
     async def manual_bonus_slash(self, interaction: discord.Interaction, member: discord.Member):
+        # 💡 3秒ルール対策：まず応答を保留する
+        await interaction.response.defer()
+        
         amount = random.randint(50, 100)
+        # 💡 安全のため str(member.id) に変換されているか core 側が怪しい場合は、core側も要チェックです
         add_user_balance(member.id, amount)
+        
         await update_ranking_message(self.bot)
         new_balance = get_user_balance(member.id)
         
         text = msg.MSG_BONUS_SUCCESS.format(mention=member.mention, amount=amount, new_balance=new_balance)
-        await interaction.response.send_message(text, allowed_mentions=discord.AllowedMentions.none())
+        # 💡 deferした後は response.send_message ではなく followup.send を使います
+        await interaction.followup.send(text, allowed_mentions=discord.AllowedMentions.none())
 
     @app_commands.command(name="z_add", description=msg.DESC_Z_ADD)
     @app_commands.default_permissions(administrator=True)
     async def add_sp_slash(self, interaction: discord.Interaction, member: discord.Member, amount: int):
+        await interaction.response.defer()
         add_user_balance(member.id, amount)
         await update_ranking_message(self.bot)
-        await interaction.response.send_message(f"{member.display_name}に **{amount} SP** 付与しました。")
+        await interaction.followup.send(f"{member.display_name}に **{amount} SP** 付与しました。")
 
     @app_commands.command(name="z_set", description=msg.DESC_Z_SET)
     @app_commands.default_permissions(administrator=True)
     async def set_sp_slash(self, interaction: discord.Interaction, member: discord.Member, amount: int):
+        await interaction.response.defer()
         set_user_balance(member.id, amount)
         await update_ranking_message(self.bot)
-        await interaction.response.send_message(f"所持金を **{amount} SP** に設定しました。")
+        await interaction.followup.send(f"所持金を **{amount} SP** に設定しました。")
 
     @app_commands.command(name="saifu", description=msg.DESC_SAIFU)
     async def saifu(self, interaction: discord.Interaction):
+        # 💡 saifuはDB読み込みだけで一瞬で終わるため defer なしで即レスポンスして大丈夫です
         balance = get_user_balance(interaction.user.id)
         await interaction.response.send_message(msg.MSG_SAIFU_CHECK.format(name=interaction.user.display_name, balance=balance))
 
     @app_commands.command(name="sent", description=msg.DESC_SENT)
     async def sent(self, interaction: discord.Interaction, member: discord.Member, amount: int):
-        if amount <= 0 or get_user_balance(interaction.user.id) < amount: return await interaction.response.send_message("無効な額または不足。", ephemeral=True)
+        if amount <= 0 or get_user_balance(interaction.user.id) < amount: 
+            return await interaction.response.send_message("無効な額または不足。", ephemeral=True)
+        
+        await interaction.response.defer()
         collection.update_one({'user_id': str(interaction.user.id)}, {'$inc': {'balance': -amount}})
         collection.update_one({'user_id': str(member.id)}, {'$inc': {'balance': amount}}, upsert=True)
         await update_ranking_message(self.bot)
-        await interaction.response.send_message(f"{member.display_name}さんに **{amount} SP** 送金しました！")
+        await interaction.followup.send(f"{member.display_name}さんに **{amount} SP** 送金しました！")
 
 async def setup(bot):
     await bot.add_cog(EconomyCog(bot))
