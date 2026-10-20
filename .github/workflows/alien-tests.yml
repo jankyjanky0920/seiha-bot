@@ -1,15 +1,15 @@
-name: Alien Bot Syntax and Score Tests
+name: Alien Bot Syntax and Feature Tests
 
 on:
   push:
     paths:
       - 'alien_bot/**'
-      - 'tests/test_alien_score.py'
+      - 'tests/test_alien_*.py'
       - '.github/workflows/alien-tests.yml'
   pull_request:
     paths:
       - 'alien_bot/**'
-      - 'tests/test_alien_score.py'
+      - 'tests/test_alien_*.py'
       - '.github/workflows/alien-tests.yml'
 
 jobs:
@@ -25,4 +25,4 @@ jobs:
       - name: Compile alien bot
         run: python -m compileall -q alien_bot
       - name: Run unit tests
-        run: python -m unittest discover -s tests -p 'test_alien_score.py' -v
+        run: python -m unittest discover -s tests -p 'test_alien_*.py' -v
