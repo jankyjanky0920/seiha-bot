@@ -14,14 +14,26 @@ import alien_bot.cogs
 class AlienBot(commands.Bot):
     def __init__(self, guild_id: int):
         # /test はスラッシュコマンドなので Message Content Intent は不要。
-        super().__init__(command_prefix="!", intents=discord.Intents.default())
+        intents = discord.Intents.default()
+        self.management_enabled = os.environ.get(
+            "ALIEN_SERVER_MANAGEMENT_ENABLED", "0"
+        ).strip().lower() in ("1", "true", "yes", "on")
+        if self.management_enabled:
+            # Discord Developer Portalの両IntentをONにしてから有効化する。
+            intents.members = True
+            intents.message_content = True
+        super().__init__(command_prefix="!", intents=intents)
         self.target_guild_id = guild_id
 
     async def setup_hook(self):
         # 追加したCogファイルを自動で読み込む。
         for module in pkgutil.iter_modules(alien_bot.cogs.__path__):
-            if not module.name.startswith("_"):
-                await self.load_extension(f"alien_bot.cogs.{module.name}")
+            if module.name.startswith("_"):
+                continue
+            if module.name == "server_management" and not self.management_enabled:
+                print("[Alien] サーバー管理機能は設定待ちのため無効", flush=True)
+                continue
+            await self.load_extension(f"alien_bot.cogs.{module.name}")
 
         guild = discord.Object(id=self.target_guild_id)
         self.tree.copy_global_to(guild=guild)
