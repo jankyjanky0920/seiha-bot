@@ -78,10 +78,11 @@ class ShootingCog(commands.Cog):
                     )
                     return
                 if prior:
+                    archive = {key: value for key, value in prior.items() if key != "_id"}
                     await asyncio.to_thread(
                         self.store.shoot_history.update_one,
                         {"_id": prior["shoot_id"]},
-                        {"$setOnInsert": dict(prior, _id_override=prior["shoot_id"])},
+                        {"$setOnInsert": archive},
                         True,
                     )
                 if interaction.guild.voice_client:
