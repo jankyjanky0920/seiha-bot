@@ -241,19 +241,11 @@ class ServerManagement(commands.Cog):
         if (
             guild is None or guild.id != self.guild_id
             or not isinstance(member, discord.Member)
-            or not self.is_worker(member)
         ):
-            await interaction.response.send_message("撮影協力者専用のコマンドです。", ephemeral=True)
+            await interaction.response.send_message("このサーバーでのみ使用できます。", ephemeral=True)
             return
         await interaction.response.defer(ephemeral=True, thinking=True)
         try:
-            workspace = await self.find_workspace(member)
-            if workspace is None or workspace.id != interaction.channel_id:
-                await interaction.followup.send(
-                    "このコマンドは自分の作業場チャンネルで利用してください。",
-                    ephemeral=True,
-                )
-                return
             role_id = int(what.value)
             if role_id not in NOTIFICATION_ROLE_IDS:
                 await interaction.followup.send("指定された通知は変更できません。", ephemeral=True)
