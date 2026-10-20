@@ -114,9 +114,7 @@ def parse_project_form(dates_text: str, projects_text: str, now: datetime | None
         expected = project["maximum"] + 1
     if expected is not None or projects[-1]["maximum"] is not None:
         raise ValueError("最後の人数範囲を「8-」のように上限なしにしてください。")
-    if projects[-1]["minimum"] != projects[-1]["minimum"] or len(
-        [p for p in projects if p["maximum"] is None]
-    ) != 1:
+    if len([p for p in projects if p["maximum"] is None]) != 1:
         raise ValueError("上限なしの人数範囲は最後に1つだけ指定してください。")
 
     return {"slots": slots, "projects": projects, "deadline_at": deadline}
@@ -149,6 +147,14 @@ def build_recruitment_message(data: dict, role_id: int) -> str:
         lines.extend([range_text, f"【{project['name']}】"])
     lines.extend(["", f"<@&{role_id}>"])
     content = "\n".join(lines)
-    if len(content) > 1900:
+    if len(content) > 1700:
         raise ValueError("募集メッセージが長すぎます。日時または企画名を減らしてください。")
     return content
+
+
+def unanswered_by_member(user_id: int, active_projects: list[dict]) -> bool:
+    """対象者が1つでも有効な企画募集に未回答ならTrue。"""
+    return any(
+        not project.get("responses", {}).get(str(user_id))
+        for project in active_projects
+    )
