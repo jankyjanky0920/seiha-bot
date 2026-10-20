@@ -6,6 +6,7 @@ from threading import Thread
 import time
 import asyncio
 import core
+from alien_bot.runner import start_alien_bot
 
 # --- Webサーバー (Render維持用) ---
 app = Flask('')
@@ -107,4 +108,5 @@ async def sync_commands(ctx):
 if __name__ == "__main__":
     Thread(target=log_memory_usage, daemon=True).start()
     keep_alive()
+    start_alien_bot()  # 環境変数が未設定ならスキップする
     bot.run(core.TOKEN)
