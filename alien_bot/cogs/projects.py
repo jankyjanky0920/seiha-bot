@@ -13,6 +13,7 @@ from zoneinfo import ZoneInfo
 
 from alien_bot.project_format import (
     EMOJIS, NO_ATTEND, JST, parse_project_form, build_recruitment_message,
+    unanswered_by_member,
 )
 from alien_bot.score_store import ADMIN_ROLE_ID, is_admin, utcnow
 
@@ -172,6 +173,28 @@ class ProjectsCog(commands.Cog):
             return
         await interaction.response.send_modal(ProjectModal(self))
 
+    async def assign_initial_notification_roles(self, guild: discord.Guild):
+        """新しい募集の初回メンション前に、対象メンバー全員へロールを付与。"""
+        role = guild.get_role(PROJECT_ROLE_ID)
+        if role is None:
+            raise RuntimeError("企画募集通知ロールが見つかりません")
+        total, failed = 0, 0
+        async for member in guild.fetch_members(limit=None):
+            if member.bot:
+                continue
+            total += 1
+            if role in member.roles:
+                continue
+            try:
+                await member.add_roles(role, reason="新しい企画募集が公開されます")
+            except (discord.Forbidden, discord.HTTPException) as exc:
+                failed += 1
+                print(f"[Alien/Project] 初期ロール付与失敗 member={member.id}: {exc}", flush=True)
+        if failed:
+            raise RuntimeError(
+                f"{total}人中{failed}人に募集ロールを付与できませんでした。Botのロール管理権限を確認してください。"
+            )
+
     async def publish(self, interaction, form, message):
         guild = interaction.guild
         channel = guild.get_channel(PROJECT_CHANNEL_ID) or await self.bot.fetch_channel(
@@ -181,13 +204,19 @@ class ProjectsCog(commands.Cog):
         if not isinstance(channel, discord.TextChannel) or role is None:
             raise RuntimeError("募集チャンネルまたは通知ロールが見つかりません")
 
-        # 先に募集文を投稿し、ID確定後にMongoDBへ記録。
-        sent = await channel.send(
-            message,
-            allowed_mentions=discord.AllowedMentions(
-                everyone=False, users=False, roles=[role]
-            ),
-        )
+        # メンションが全員へ届くよう、投稿より先に通知ロールを配布する。
+        try:
+            await self.assign_initial_notification_roles(guild)
+            sent = await channel.send(
+                message,
+                allowed_mentions=discord.AllowedMentions(
+                    everyone=False, users=False, roles=[role]
+                ),
+            )
+        except Exception:
+            # 途中で失敗しても、別の有効な募集への回答状態は保護する。
+            await self.sync_all_members()
+            raise
         data = {
             "_id": uuid4().hex,
             "guild_id": guild.id,
@@ -223,10 +252,7 @@ class ProjectsCog(commands.Cog):
             active = projects
             if active is None:
                 active = await asyncio.to_thread(self.current_projects)
-            needs_role = any(
-                not project.get("responses", {}).get(str(member.id))
-                for project in active
-            )
+            needs_role = unanswered_by_member(member.id, active)
             role = member.guild.get_role(PROJECT_ROLE_ID)
             if role is None:
                 print("[Alien/Project] 募集ロールが見つかりません", flush=True)
@@ -249,7 +275,7 @@ class ProjectsCog(commands.Cog):
             async for member in guild.fetch_members(limit=None):
                 if not member.bot:
                     await self.sync_member(member, active)
-                    if any(not item.get("responses", {}).get(str(member.id)) for item in active):
+                    if unanswered_by_member(member.id, active):
                         count += 1
         except (discord.Forbidden, discord.HTTPException) as exc:
             print(f"[Alien/Project] メンバー同期失敗: {exc}", flush=True)
