@@ -18,9 +18,13 @@ class AlienBot(commands.Bot):
         self.management_enabled = os.environ.get(
             "ALIEN_SERVER_MANAGEMENT_ENABLED", "0"
         ).strip().lower() in ("1", "true", "yes", "on")
-        if self.management_enabled:
-            # Discord Developer Portalの両IntentをONにしてから有効化する。
+        self.economy_enabled = os.environ.get(
+            "ALIEN_ECONOMY_ENABLED", "0"
+        ).strip().lower() in ("1", "true", "yes", "on")
+        if self.management_enabled or self.economy_enabled:
+            # 管理と撮影イベントで参加者を扱うため Members Intent が必要。
             intents.members = True
+        if self.management_enabled:
             intents.message_content = True
         super().__init__(command_prefix="!", intents=intents)
         self.target_guild_id = guild_id
@@ -32,6 +36,9 @@ class AlienBot(commands.Bot):
                 continue
             if module.name == "server_management" and not self.management_enabled:
                 print("[Alien] サーバー管理機能は設定待ちのため無効", flush=True)
+                continue
+            if module.name in ("shooting", "shop") and not self.economy_enabled:
+                print(f"[Alien] {module.name} は設定待ちのため無効", flush=True)
                 continue
             await self.load_extension(f"alien_bot.cogs.{module.name}")
 
