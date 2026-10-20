@@ -23,6 +23,11 @@ PROJECT_ROLE_ID = 1561755446304317532
 VALID_REACTIONS = set(EMOJIS) | {NO_ATTEND}
 
 
+def is_notification_target(member) -> bool:
+    """管理者・Bot以外を企画募集通知の対象とする。"""
+    return not member.bot and not is_admin(member)
+
+
 class ProjectConfirmation(discord.ui.View):
     def __init__(self, cog, author_id: int, form: dict, message: str):
         super().__init__(timeout=600)
@@ -174,7 +179,7 @@ class ProjectsCog(commands.Cog):
         await interaction.response.send_modal(ProjectModal(self))
 
     async def assign_initial_notification_roles(self, guild: discord.Guild):
-        """新しい募集の初回メンション前に、対象メンバー全員へロールを付与。"""
+        """初回メンション前に協力者へ付与し、管理者のロールを解除。"""
         role = guild.get_role(PROJECT_ROLE_ID)
         if role is None:
             raise RuntimeError("企画募集通知ロールが見つかりません")
@@ -182,17 +187,25 @@ class ProjectsCog(commands.Cog):
         async for member in guild.fetch_members(limit=None):
             if member.bot:
                 continue
-            total += 1
-            if role in member.roles:
+            should_have_role = is_notification_target(member)
+            if should_have_role:
+                total += 1
+            if (role in member.roles) == should_have_role:
                 continue
             try:
-                await member.add_roles(role, reason="新しい企画募集が公開されます")
+                if should_have_role:
+                    await member.add_roles(role, reason="新しい企画募集が公開されます")
+                else:
+                    await member.remove_roles(
+                        role, reason="管理者は企画募集通知の対象外です"
+                    )
             except (discord.Forbidden, discord.HTTPException) as exc:
                 failed += 1
-                print(f"[Alien/Project] 初期ロール付与失敗 member={member.id}: {exc}", flush=True)
+                print(f"[Alien/Project] 初期ロール調整失敗 member={member.id}: {exc}", flush=True)
         if failed:
             raise RuntimeError(
-                f"{total}人中{failed}人に募集ロールを付与できませんでした。Botのロール管理権限を確認してください。"
+                f"企画募集通知ロールを{failed}人分調整できませんでした。"
+                "Botのロール管理権限を確認してください。"
             )
 
     async def publish(self, interaction, form, message):
@@ -252,7 +265,10 @@ class ProjectsCog(commands.Cog):
             active = projects
             if active is None:
                 active = await asyncio.to_thread(self.current_projects)
-            needs_role = unanswered_by_member(member.id, active)
+            needs_role = (
+                is_notification_target(member)
+                and unanswered_by_member(member.id, active)
+            )
             role = member.guild.get_role(PROJECT_ROLE_ID)
             if role is None:
                 print("[Alien/Project] 募集ロールが見つかりません", flush=True)
@@ -275,7 +291,8 @@ class ProjectsCog(commands.Cog):
             async for member in guild.fetch_members(limit=None):
                 if not member.bot:
                     await self.sync_member(member, active)
-                    if unanswered_by_member(member.id, active):
+                    if (is_notification_target(member)
+                            and unanswered_by_member(member.id, active)):
                         count += 1
         except (discord.Forbidden, discord.HTTPException) as exc:
             print(f"[Alien/Project] メンバー同期失敗: {exc}", flush=True)
@@ -370,6 +387,16 @@ class ProjectsCog(commands.Cog):
     async def on_member_join(self, member):
         if member.guild.id == self.bot.target_guild_id and not member.bot:
             await self.sync_member(member)
+
+    @commands.Cog.listener()
+    async def on_member_update(self, before, after):
+        # 管理者ロールを付与／解除した瞬間にも通知設定を調整する。
+        if (
+            after.guild.id == self.bot.target_guild_id
+            and not after.bot
+            and is_admin(before) != is_admin(after)
+        ):
+            await self.sync_member(after)
 
     @commands.Cog.listener()
     async def on_ready(self):
