@@ -41,7 +41,13 @@ def is_admin(member) -> bool:
 
 
 def is_worker(member) -> bool:
+    """管理者には作業場を作成しないための判定。"""
     return not member.bot and not is_admin(member)
+
+
+def can_earn_shoot_score(member) -> bool:
+    """Bot以外の全員（管理者を含む）は撮影のスコア対象。"""
+    return not member.bot
 
 
 class ScoreStore:
