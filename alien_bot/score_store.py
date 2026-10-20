@@ -47,7 +47,8 @@ def is_worker(member) -> bool:
 class ScoreStore:
     def __init__(self):
         self.client = MongoClient(
-            os.environ["MONGO_URL"], serverSelectionTimeoutMS=8000
+            os.environ["MONGO_URL"], serverSelectionTimeoutMS=8000,
+            tz_aware=True,
         )
         db = self.client[DB_NAME]
         self.wallets = db["score_wallets"]
