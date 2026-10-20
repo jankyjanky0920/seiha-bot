@@ -39,7 +39,7 @@ class ScoreCalculations(unittest.TestCase):
 
     def test_admin_can_earn_without_workspace(self):
         from types import SimpleNamespace
-        admin = SimpleNamespace(bot=False, roles=[SimpleNamespace(id=1541554412126994594)])
+        admin = SimpleNamespace(id=10, bot=False, roles=[SimpleNamespace(id=1541554412126994594)])
         worker = SimpleNamespace(bot=False, roles=[])
         bot = SimpleNamespace(bot=True, roles=[])
         self.assertTrue(can_earn_shoot_score(admin))
@@ -55,8 +55,8 @@ class ScoreCalculations(unittest.TestCase):
         fake.bot = SimpleNamespace(target_guild_id=1)
         fake.store = SimpleNamespace(workspace_channel_id=lambda guild_id, user_id: 500)
         admin = SimpleNamespace(bot=False, roles=[SimpleNamespace(id=1541554412126994594)])
-        member = SimpleNamespace(bot=False, roles=[])
-        bot_user = SimpleNamespace(bot=True, roles=[])
+        member = SimpleNamespace(id=20, bot=False, roles=[])
+        bot_user = SimpleNamespace(id=30, bot=True, roles=[])
         make_interaction = lambda user, channel: SimpleNamespace(
             guild=SimpleNamespace(id=1), user=user, channel_id=channel
         )
