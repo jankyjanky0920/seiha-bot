@@ -3,6 +3,7 @@ import discord
 from discord.ext import commands
 from flask import Flask
 from threading import Thread
+import time
 import asyncio
 import core
 
@@ -17,6 +18,28 @@ def keep_alive():
     t = Thread(target=run_web)
     t.daemon = True
     t.start()
+
+# --- メモリ使用量のログ記録（Render / Linux）---
+def log_memory_usage():
+    """現在・最大メモリ使用量を5分ごとにログへ記録します。"""
+    while True:
+        try:
+            stats = {}
+            with open("/proc/self/status", encoding="utf-8") as status:
+                for line in status:
+                    if line.startswith(("VmRSS:", "VmHWM:")):
+                        key, value = line.split(":", 1)
+                        stats[key] = int(value.strip().split()[0]) / 1024
+
+            current = stats.get("VmRSS")
+            peak = stats.get("VmHWM")
+            if current is not None and peak is not None:
+                print(f"[Memory] 現在の使用量: {current:.1f} MiB | 最大使用量: {peak:.1f} MiB", flush=True)
+            else:
+                print("[Memory] 使用量の取得に必要な情報がありません", flush=True)
+        except (OSError, ValueError, IndexError) as error:
+            print(f"[Memory] 使用量を取得できませんでした: {error}", flush=True)
+        time.sleep(300)
 
 # --- Bot本体の定義 ---
 intents = discord.Intents.all()
@@ -82,5 +105,6 @@ async def sync_commands(ctx):
     await ctx.send("✅ スラッシュコマンド・メッセージの強制上書き同期が完了しました！")
 
 if __name__ == "__main__":
+    Thread(target=log_memory_usage, daemon=True).start()
     keep_alive()
     bot.run(core.TOKEN)
