@@ -60,10 +60,13 @@ class ScoreCalculations(unittest.TestCase):
         make_interaction = lambda user, channel: SimpleNamespace(
             guild=SimpleNamespace(id=1), user=user, channel_id=channel
         )
-        self.assertTrue(asyncio.run(fake.in_personal_workspace(make_interaction(admin, 999))))
-        self.assertTrue(asyncio.run(fake.in_personal_workspace(make_interaction(member, 500))))
-        self.assertFalse(asyncio.run(fake.in_personal_workspace(make_interaction(member, 999))))
-        self.assertFalse(asyncio.run(fake.in_personal_workspace(make_interaction(bot_user, 500))))
+        # ここではDiscord側のMember型チェックをモックし、作業場判定だけを検証。
+        from unittest.mock import patch
+        with patch.object(ShopCog, "guild_member", return_value=True):
+            self.assertTrue(asyncio.run(fake.in_personal_workspace(make_interaction(admin, 999))))
+            self.assertTrue(asyncio.run(fake.in_personal_workspace(make_interaction(member, 500))))
+            self.assertFalse(asyncio.run(fake.in_personal_workspace(make_interaction(member, 999))))
+            self.assertFalse(asyncio.run(fake.in_personal_workspace(make_interaction(bot_user, 500))))
 
     def test_command_names_changed_only(self):
         from alien_bot.cogs.shooting import ShootingCog
