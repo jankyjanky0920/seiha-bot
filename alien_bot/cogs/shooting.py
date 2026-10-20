@@ -9,7 +9,7 @@ from discord.ext import commands
 from discord.http import Route
 
 from alien_bot.score_store import (
-    ScoreStore, ADMIN_CHANNEL_ID, is_admin, is_worker, score_text, utcnow,
+    ScoreStore, ADMIN_CHANNEL_ID, is_admin, can_earn_shoot_score, score_text, utcnow,
 )
 
 
@@ -56,7 +56,7 @@ class ShootingCog(commands.Cog):
             print(f"[Alien/Shoot] VCステータス変更不可: {err}", flush=True)
             return str(err)
 
-    @app_commands.command(name="admin_shootstart", description="撮影を開始して時間記録を行います【管理者】")
+    @app_commands.command(name="zzzadmin_shootstart", description="撮影を開始して時間記録を行います【管理者】")
     async def shootstart(self, interaction: discord.Interaction):
         if not self.permitted(interaction):
             await interaction.response.send_message("管理者専用コマンドです。", ephemeral=True)
@@ -73,7 +73,7 @@ class ShootingCog(commands.Cog):
                 )
                 if prior and prior.get("phase") in ("running", "finalizing"):
                     await interaction.followup.send(
-                        "すでに撮影中、または前回の撮影の精算途中です。先に /admin_shootfinish を実行してください。",
+                        "すでに撮影中、または前回の撮影の精算途中です。先に /zzzadmin_shootfinish を実行してください。",
                         ephemeral=True,
                     )
                     return
@@ -96,7 +96,7 @@ class ShootingCog(commands.Cog):
                         "joined_at": started, "ended_at": None,
                         "display_name": member.display_name,
                     }
-                    for member in vc.members if is_worker(member)
+                    for member in vc.members if can_earn_shoot_score(member)
                 }
                 session = {
                     "_id": "current", "shoot_id": uuid4().hex[:16],
@@ -128,7 +128,7 @@ class ShootingCog(commands.Cog):
                     ephemeral=True,
                 )
 
-    @app_commands.command(name="admin_shootfinish", description="撮影を終了してスコアを確定します【管理者】")
+    @app_commands.command(name="zzzadmin_shootfinish", description="撮影を終了してスコアを確定します【管理者】")
     async def shootfinish(self, interaction: discord.Interaction):
         if not self.permitted(interaction):
             await interaction.response.send_message("管理者専用コマンドです。", ephemeral=True)
@@ -193,7 +193,7 @@ class ShootingCog(commands.Cog):
             except Exception as err:
                 print(f"[Alien/Shoot] 精算失敗: {type(err).__name__}: {err}", flush=True)
                 await interaction.followup.send(
-                    "精算の途中でエラーになりました。/admin_shootfinish を再実行してください。二重付与は防止しています。",
+                    "精算の途中でエラーになりました。/zzzadmin_shootfinish を再実行してください。二重付与は防止しています。",
                     ephemeral=True,
                 )
 
@@ -211,7 +211,7 @@ class ShootingCog(commands.Cog):
 
     @commands.Cog.listener()
     async def on_voice_state_update(self, member, before, after):
-        if member.guild.id != self.bot.target_guild_id or not is_worker(member):
+        if member.guild.id != self.bot.target_guild_id or not can_earn_shoot_score(member):
             return
         old = before.channel.id if before.channel else None
         new = after.channel.id if after.channel else None

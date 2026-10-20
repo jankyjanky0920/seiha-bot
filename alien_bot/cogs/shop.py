@@ -48,7 +48,12 @@ class ShopCog(commands.Cog):
         )
 
     async def in_personal_workspace(self, interaction):
-        if not self.guild_member(interaction) or not is_worker(interaction.user):
+        if not self.guild_member(interaction):
+            return False
+        # 管理者は専用作業場を持たないので、サーバー内の全チャンネルを許可。
+        if is_admin(interaction.user):
+            return True
+        if not is_worker(interaction.user):
             return False
         channel_id = await asyncio.to_thread(
             self.store.workspace_channel_id,
@@ -77,7 +82,7 @@ class ShopCog(commands.Cog):
         await interaction.response.defer(ephemeral=True, thinking=True)
         if not await self.in_personal_workspace(interaction):
             await interaction.followup.send(
-                "自分の作業場チャンネルで使用してください。", ephemeral=True
+                "自分の作業場チャンネルで使用してください（管理者は任意のチャンネルで使用できます）。", ephemeral=True
             )
             return
         try:
@@ -116,7 +121,7 @@ class ShopCog(commands.Cog):
         await interaction.response.defer(ephemeral=True, thinking=True)
         if not await self.in_personal_workspace(interaction):
             await interaction.followup.send(
-                "自分の作業場チャンネルで利用してください。", ephemeral=True
+                "自分の作業場チャンネルで利用してください（管理者は任意のチャンネルで利用できます）。", ephemeral=True
             )
             return
         try:
@@ -178,7 +183,7 @@ class ShopCog(commands.Cog):
                 await interaction.followup.send(
                     f"申請を保存しスコアを確保しましたが、管理者へ通知できませんでした。\n"
                     f"申請ID：`{order['_id']}`\n"
-                    "管理者に /admin_shoprequests の確認を依頼してください。",
+                    "管理者に /zzzadmin_shoprequests の確認を依頼してください。",
                     ephemeral=True,
                 )
         except Exception as error:
@@ -188,7 +193,7 @@ class ShopCog(commands.Cog):
                 ephemeral=True,
             )
 
-    @app_commands.command(name="admin_shoprequests", description="保留中の購入申請を確認【管理者】")
+    @app_commands.command(name="zzzadmin_shoprequests", description="保留中の購入申請を確認【管理者】")
     async def requests(self, interaction: discord.Interaction):
         if not self.guild_member(interaction) or not is_admin(interaction.user):
             await interaction.response.send_message("管理者専用です。", ephemeral=True)
@@ -211,7 +216,7 @@ class ShopCog(commands.Cog):
             print(f"[Alien/Shop] 申請一覧エラー: {error}", flush=True)
             await interaction.followup.send("申請を確認できませんでした。", ephemeral=True)
 
-    @app_commands.command(name="admin_shopdecision", description="申請IDを指定して手動で審査【管理者】")
+    @app_commands.command(name="zzzadmin_shopdecision", description="申請IDを指定して手動で審査【管理者】")
     @app_commands.describe(order_id="申請ID", decision="承認または却下")
     @app_commands.choices(decision=[
         app_commands.Choice(name="承認", value="approve"),
