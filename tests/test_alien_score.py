@@ -1,6 +1,7 @@
 """スコアの端数処理とショップ商品の基本チェック。"""
 import unittest
 from datetime import datetime, timedelta, timezone
+from importlib import import_module
 
 from alien_bot.score_store import PRODUCTS, duration_reward, score_text
 
@@ -28,6 +29,11 @@ class ScoreCalculations(unittest.TestCase):
             duration_reward(start, start + timedelta(seconds=59)),
             (0, 0),
         )
+
+    def test_discord_cog_modules_import(self):
+        # スラッシュコマンドのannotationやデコレータの問題を検知する。
+        import_module("alien_bot.cogs.shooting")
+        import_module("alien_bot.cogs.shop")
 
     def test_prices(self):
         self.assertEqual(
