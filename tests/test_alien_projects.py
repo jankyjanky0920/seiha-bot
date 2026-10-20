@@ -67,6 +67,82 @@ class RecruitmentTests(unittest.TestCase):
         self.assertFalse(unanswered_by_member(20, [two]))
         self.assertFalse(unanswered_by_member(10, []))
 
+    def test_notification_targets_exclude_admin_and_bots(self):
+        from types import SimpleNamespace
+        from alien_bot.cogs.projects import is_notification_target
+        admin = SimpleNamespace(
+            bot=False, roles=[SimpleNamespace(id=1541554412126994594)]
+        )
+        regular = SimpleNamespace(bot=False, roles=[])
+        bot_user = SimpleNamespace(bot=True, roles=[])
+        self.assertFalse(is_notification_target(admin))
+        self.assertTrue(is_notification_target(regular))
+        self.assertFalse(is_notification_target(bot_user))
+
+    def test_admin_role_removed_during_reconciliation(self):
+        import asyncio
+        from types import SimpleNamespace
+        from unittest.mock import AsyncMock
+        from alien_bot.cogs.projects import ProjectsCog, PROJECT_ROLE_ID
+
+        project_role = SimpleNamespace(id=PROJECT_ROLE_ID)
+        admin_role = SimpleNamespace(id=1541554412126994594)
+        guild = SimpleNamespace(
+            id=123, get_role=lambda role_id: project_role
+        )
+        admin = SimpleNamespace(
+            id=10, bot=False, guild=guild, roles=[admin_role, project_role],
+            add_roles=AsyncMock(), remove_roles=AsyncMock(),
+        )
+        worker = SimpleNamespace(
+            id=20, bot=False, guild=guild, roles=[],
+            add_roles=AsyncMock(), remove_roles=AsyncMock(),
+        )
+        cog = object.__new__(ProjectsCog)
+        cog.bot = SimpleNamespace(target_guild_id=123)
+        cog.member_locks = {}
+        active = [{"responses": {}}]
+        asyncio.run(cog.sync_member(admin, active))
+        admin.remove_roles.assert_awaited_once()
+        admin.add_roles.assert_not_awaited()
+        asyncio.run(cog.sync_member(worker, active))
+        worker.add_roles.assert_awaited_once()
+        worker.remove_roles.assert_not_awaited()
+
+    def test_initial_publishing_excludes_and_cleans_admin(self):
+        import asyncio
+        from types import SimpleNamespace
+        from unittest.mock import AsyncMock
+        from alien_bot.cogs.projects import ProjectsCog, PROJECT_ROLE_ID
+
+        project_role = SimpleNamespace(id=PROJECT_ROLE_ID)
+        admin_role = SimpleNamespace(id=1541554412126994594)
+        admin = SimpleNamespace(
+            id=10, bot=False, roles=[admin_role, project_role],
+            add_roles=AsyncMock(), remove_roles=AsyncMock(),
+        )
+        worker = SimpleNamespace(
+            id=20, bot=False, roles=[],
+            add_roles=AsyncMock(), remove_roles=AsyncMock(),
+        )
+        bot_user = SimpleNamespace(
+            id=30, bot=True, roles=[],
+            add_roles=AsyncMock(), remove_roles=AsyncMock(),
+        )
+        async def members():
+            for member in (admin, worker, bot_user):
+                yield member
+        guild = SimpleNamespace(
+            get_role=lambda role_id: project_role,
+            fetch_members=lambda limit=None: members(),
+        )
+        cog = object.__new__(ProjectsCog)
+        asyncio.run(cog.assign_initial_notification_roles(guild))
+        admin.add_roles.assert_not_awaited()
+        admin.remove_roles.assert_awaited_once()
+        worker.add_roles.assert_awaited_once()
+        bot_user.add_roles.assert_not_awaited()
+
     def test_discord_cog_import(self):
         module = import_module("alien_bot.cogs.projects")
         self.assertEqual(module.ProjectsCog.create.name, "zzzadmin_project")
