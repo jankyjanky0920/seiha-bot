@@ -66,8 +66,12 @@ class EditInfoModal(discord.ui.Modal, title="動画編集に使用する情報�
         label="③ Name（必須）", placeholder="正式な活動名 / 更新時は省略可能",
         max_length=100, required=False,
     )
-    picture = discord.ui.FileUpload(
-        required=False, min_values=0, max_values=5,
+    picture = discord.ui.Label(
+        text="② Picture（立ち絵・表情差分）",
+        description="一度に最大5枚・省略可（既存画像は残します）",
+        component=discord.ui.FileUpload(
+            required=False, min_values=0, max_values=5,
+        ),
     )
     linked_sns = discord.ui.TextInput(
         label="④ 連携用SNS（任意）", required=False,
@@ -184,7 +188,7 @@ class EditInfoCog(commands.Cog):
         await interaction.response.defer(ephemeral=True, thinking=True)
         member = interaction.user
         try:
-            files = list(modal.picture.values)
+            files = list(modal.picture.component.values)
             if not any((
                 str(modal.color).strip(), str(modal.name).strip(),
                 str(modal.linked_sns).strip(), str(modal.description_sns).strip(),
