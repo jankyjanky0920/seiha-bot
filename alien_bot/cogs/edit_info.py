@@ -73,17 +73,25 @@ class EditInfoModal(discord.ui.Modal, title="動画編集に使用する情報�
             required=False, min_values=0, max_values=5,
         ),
     )
-    linked_sns = discord.ui.TextInput(
-        label="④ 連携用SNS（任意）", required=False,
-        style=discord.TextStyle.paragraph,
-        placeholder="YouTube: https://youtube.com/@...\nTikTok: https://www.tiktok.com/@...\nX: https://x.com/...",
-        max_length=1700,
+    linked_sns = discord.ui.Label(
+        text="④ 連携用SNS（任意）",
+        description="コラボレーション依頼やタグ付けを行うYouTube、X、TikTokアカウントをリンクで記述してください。",
+        component=discord.ui.TextInput(
+            required=False,
+            style=discord.TextStyle.paragraph,
+            placeholder="YouTube: https://youtube.com/@...\nTikTok: https://www.tiktok.com/@...\nX: https://x.com/...",
+            max_length=1700,
+        ),
     )
-    description_sns = discord.ui.TextInput(
-        label="⑤ 概要欄用SNS（最大3件）", required=False,
-        style=discord.TextStyle.paragraph,
-        placeholder="YouTube同上\npixiv: https://www.pixiv.net/users/...",
-        max_length=1700,
+    description_sns = discord.ui.Label(
+        text="⑤ 概要欄用SNS（最大3件）",
+        description="概要欄に書いてほしいSNSを三つまで記入してください。YouTube、X、TikTokの場合は「同上」で構いません。",
+        component=discord.ui.TextInput(
+            required=False,
+            style=discord.TextStyle.paragraph,
+            placeholder="YouTube同上\npixiv: https://www.pixiv.net/users/...",
+            max_length=1700,
+        ),
     )
 
     def __init__(self, cog):
@@ -191,7 +199,8 @@ class EditInfoCog(commands.Cog):
             files = list(modal.picture.component.values)
             if not any((
                 str(modal.color).strip(), str(modal.name).strip(),
-                str(modal.linked_sns).strip(), str(modal.description_sns).strip(),
+                str(modal.linked_sns.component).strip(),
+                str(modal.description_sns.component).strip(),
                 files,
             )):
                 await interaction.followup.send(
@@ -217,7 +226,8 @@ class EditInfoCog(commands.Cog):
                 )
                 updates = parse_edit_fields(
                     str(modal.color), str(modal.name),
-                    str(modal.linked_sns), str(modal.description_sns),
+                    str(modal.linked_sns.component),
+                    str(modal.description_sns.component),
                     existing,
                 )
                 old_images = (existing or {}).get("pictures", [])
