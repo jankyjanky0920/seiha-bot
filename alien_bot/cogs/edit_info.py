@@ -399,7 +399,9 @@ class EditInfoCog(commands.Cog):
                     if channel:
                         await channel.send(
                             reminder_error(error),
-                            allowed_mentions=discord.AllowedMentions(everyone=True),
+                            allowed_mentions=discord.AllowedMentions(
+                                everyone=True, users=False, roles=False
+                            ),
                         )
                         immediate += 1
                     else:
@@ -446,7 +448,9 @@ class EditInfoCog(commands.Cog):
                     )
                     await channel.send(
                         message,
-                        allowed_mentions=discord.AllowedMentions(everyone=True),
+                        allowed_mentions=discord.AllowedMentions(
+                                everyone=True, users=False, roles=False
+                            ),
                     )
                     await asyncio.to_thread(
                         self.reminders.update_one,
