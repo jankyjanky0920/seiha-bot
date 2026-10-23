@@ -24,7 +24,11 @@ class AlienBot(commands.Bot):
         self.projects_enabled = os.environ.get(
             "ALIEN_PROJECTS_ENABLED", "0"
         ).strip().lower() in ("1", "true", "yes", "on")
-        if self.management_enabled or self.economy_enabled or self.projects_enabled:
+        self.edit_info_enabled = os.environ.get(
+            "ALIEN_EDIT_INFO_ENABLED", "0"
+        ).strip().lower() in ("1", "true", "yes", "on")
+        if (self.management_enabled or self.economy_enabled
+                or self.projects_enabled or self.edit_info_enabled):
             # 管理と撮影イベントで参加者を扱うため Members Intent が必要。
             intents.members = True
         if self.management_enabled:
@@ -45,6 +49,9 @@ class AlienBot(commands.Bot):
                 continue
             if module.name == "projects" and not self.projects_enabled:
                 print("[Alien] 企画募集機能は設定待ちのため無効", flush=True)
+                continue
+            if module.name == "edit_info" and not self.edit_info_enabled:
+                print("[Alien] 編集情報提出は設定待ちのため無効", flush=True)
                 continue
             await self.load_extension(f"alien_bot.cogs.{module.name}")
 
