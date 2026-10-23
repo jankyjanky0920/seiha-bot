@@ -382,11 +382,11 @@ class EditInfoCog(commands.Cog):
                         self.profiles.find_one, {"_id": self.key(user.id)}
                     )
                     had_submission = bool(profile and profile.get("version", 0) > 0)
-                    fields = {"watch": True}
-                    if error and had_submission:
-                        fields["error"] = error
-                    elif not had_submission:
-                        fields["error"] = None
+                    # エラー文を省略して再登録すると以前のエラー指定も解除する。
+                    fields = {
+                        "watch": True,
+                        "error": error if error and had_submission else None,
+                    }
                     await asyncio.to_thread(
                         self.profiles.update_one,
                         {"_id": self.key(user.id)},
