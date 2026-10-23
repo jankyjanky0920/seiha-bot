@@ -64,7 +64,8 @@ def parse_description(text: str, linked: dict, previous: dict | None = None) -> 
         line = line.strip()
         if not line:
             continue
-        match = SAME_RE.fullmatch(line)
+        # 「X: 同上」は下のキー/値形式で処理する。先に同上と誤認しない。
+        match = SAME_RE.fullmatch(line) if ":" not in line and "：" not in line else None
         if match:
             platform = platform_name(match.group(1).strip())
             if platform not in linked:
