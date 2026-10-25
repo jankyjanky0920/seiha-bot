@@ -1,4 +1,4 @@
-"""企画募集の確認投稿・リアクションによる未回答管理・18時の一時通知。"""
+"""企画募集の確認投稿・リアクション記録・未回答者の作業場への18時通知。"""
 
 import asyncio
 import os
@@ -9,22 +9,30 @@ import discord
 from discord import app_commands
 from discord.ext import commands, tasks
 from pymongo import MongoClient
+from pymongo.errors import DuplicateKeyError
 from zoneinfo import ZoneInfo
 
 from alien_bot.project_format import (
     EMOJIS, NO_ATTEND, JST, parse_project_form, build_recruitment_message,
-    unanswered_by_member,
+    overdue_unanswered_by_member,
 )
-from alien_bot.score_store import ADMIN_ROLE_ID, is_admin, utcnow
+from alien_bot.score_store import is_admin, utcnow
 
 
 PROJECT_CHANNEL_ID = 1544209717218508882
-PROJECT_ROLE_ID = 1561755446304317532
+
 VALID_REACTIONS = set(EMOJIS) | {NO_ATTEND}
+REMINDER_TEXT = (
+    "@everyone\n"
+    "まだ回答していない企画募集があります！\n"
+    f"（企画募集チャンネル <#{PROJECT_CHANNEL_ID}>）にて、"
+    "まだ確認していない募集メッセージにリアクションしてください。\n"
+    "募集メッセージになんらかのリアクションを行うことでこの通知は停止します。"
+)
 
 
 def is_notification_target(member) -> bool:
-    """管理者・Bot以外を企画募集通知の対象とする。"""
+    """一般の撮影協力者のみ作業場での通知対象とする。"""
     return not member.bot and not is_admin(member)
 
 
@@ -114,7 +122,7 @@ class ProjectModal(discord.ui.Modal, title="企画募集の作成"):
             return
         try:
             form = parse_project_form(str(self.dates), str(self.plans))
-            message = build_recruitment_message(form, PROJECT_ROLE_ID)
+            message = build_recruitment_message(form)
         except ValueError as exc:
             await interaction.response.send_message(
                 f"入力内容を確認してください：{exc}", ephemeral=True
@@ -124,7 +132,7 @@ class ProjectModal(discord.ui.Modal, title="企画募集の作成"):
         view = ProjectConfirmation(self.cog, interaction.user.id, form, message)
         await interaction.response.send_message(
             "**こういった内容で企画を募集します。よろしいですか？**\n\n"
-            + message + "\n\n※確認画面でのロール通知は送信しません。",
+            + message + "\n\n※募集を投稿してから72時間後以降、未回答者にのみ作業場へ通知します。",
             ephemeral=True,
             view=view,
             allowed_mentions=discord.AllowedMentions.none(),
@@ -140,7 +148,7 @@ class ProjectsCog(commands.Cog):
         db = self.db_client["nkii_nkii_alien"]
         self.projects = db["project_recruitments"]
         self.reminders = db["project_reminders"]
-        self.member_locks = {}
+        self.workspaces = db["workspaces"]
         self.publish_lock = asyncio.Lock()
         self.reaction_lock = asyncio.Lock()
         self.bootstrapped = False
@@ -178,58 +186,17 @@ class ProjectsCog(commands.Cog):
             return
         await interaction.response.send_modal(ProjectModal(self))
 
-    async def assign_initial_notification_roles(self, guild: discord.Guild):
-        """初回メンション前に協力者へ付与し、管理者のロールを解除。"""
-        role = guild.get_role(PROJECT_ROLE_ID)
-        if role is None:
-            raise RuntimeError("企画募集通知ロールが見つかりません")
-        total, failed = 0, 0
-        async for member in guild.fetch_members(limit=None):
-            if member.bot:
-                continue
-            should_have_role = is_notification_target(member)
-            if should_have_role:
-                total += 1
-            if (role in member.roles) == should_have_role:
-                continue
-            try:
-                if should_have_role:
-                    await member.add_roles(role, reason="新しい企画募集が公開されます")
-                else:
-                    await member.remove_roles(
-                        role, reason="管理者は企画募集通知の対象外です"
-                    )
-            except (discord.Forbidden, discord.HTTPException) as exc:
-                failed += 1
-                print(f"[Alien/Project] 初期ロール調整失敗 member={member.id}: {exc}", flush=True)
-        if failed:
-            raise RuntimeError(
-                f"企画募集通知ロールを{failed}人分調整できませんでした。"
-                "Botのロール管理権限を確認してください。"
-            )
-
     async def publish(self, interaction, form, message):
         guild = interaction.guild
         channel = guild.get_channel(PROJECT_CHANNEL_ID) or await self.bot.fetch_channel(
             PROJECT_CHANNEL_ID
         )
-        role = guild.get_role(PROJECT_ROLE_ID)
-        if not isinstance(channel, discord.TextChannel) or role is None:
-            raise RuntimeError("募集チャンネルまたは通知ロールが見つかりません")
-
-        # メンションが全員へ届くよう、投稿より先に通知ロールを配布する。
-        try:
-            await self.assign_initial_notification_roles(guild)
-            sent = await channel.send(
-                message,
-                allowed_mentions=discord.AllowedMentions(
-                    everyone=False, users=False, roles=[role]
-                ),
-            )
-        except Exception:
-            # 途中で失敗しても、別の有効な募集への回答状態は保護する。
-            await self.sync_all_members()
-            raise
+        if not isinstance(channel, discord.TextChannel):
+            raise RuntimeError("企画募集チャンネルが見つかりません")
+        # 旧通知ロールは削除済み。募集投稿時のメンションは行わない。
+        sent = await channel.send(
+            message, allowed_mentions=discord.AllowedMentions.none()
+        )
         data = {
             "_id": uuid4().hex,
             "guild_id": guild.id,
@@ -243,12 +210,10 @@ class ProjectsCog(commands.Cog):
             "created_by": str(interaction.user.id),
             "created_at": utcnow(),
         }
-        # datetimeはBSONへ保存可能。deadlineの判定はUTCで統一。
         await asyncio.to_thread(self.projects.insert_one, data)
         for emoji in EMOJIS[:len(form["slots"])] + (NO_ATTEND,):
             await sent.add_reaction(emoji)
         print(f"[Alien/Project] 公開: {sent.id}", flush=True)
-        await self.sync_all_members()
         return sent
 
     async def get_channel(self, guild_id=None):
@@ -256,47 +221,6 @@ class ProjectsCog(commands.Cog):
         if ch is None:
             ch = await self.bot.fetch_channel(PROJECT_CHANNEL_ID)
         return ch
-
-    async def sync_member(self, member: discord.Member, projects=None):
-        if member.bot or member.guild.id != self.bot.target_guild_id:
-            return
-        lock = self.member_locks.setdefault(member.id, asyncio.Lock())
-        async with lock:
-            active = projects
-            if active is None:
-                active = await asyncio.to_thread(self.current_projects)
-            needs_role = (
-                is_notification_target(member)
-                and unanswered_by_member(member.id, active)
-            )
-            role = member.guild.get_role(PROJECT_ROLE_ID)
-            if role is None:
-                print("[Alien/Project] 募集ロールが見つかりません", flush=True)
-                return
-            try:
-                if needs_role and role not in member.roles:
-                    await member.add_roles(role, reason="有効な企画募集に未回答")
-                elif not needs_role and role in member.roles:
-                    await member.remove_roles(role, reason="有効な企画募集に全回答／期限終了")
-            except (discord.Forbidden, discord.HTTPException) as exc:
-                print(f"[Alien/Project] ロール操作失敗 member={member.id}: {exc}", flush=True)
-
-    async def sync_all_members(self):
-        guild = self.bot.get_guild(self.bot.target_guild_id)
-        if guild is None:
-            return 0
-        active = await asyncio.to_thread(self.current_projects)
-        count = 0
-        try:
-            async for member in guild.fetch_members(limit=None):
-                if not member.bot:
-                    await self.sync_member(member, active)
-                    if (is_notification_target(member)
-                            and unanswered_by_member(member.id, active)):
-                        count += 1
-        except (discord.Forbidden, discord.HTTPException) as exc:
-            print(f"[Alien/Project] メンバー同期失敗: {exc}", flush=True)
-        return count
 
     async def refresh_reactions(self):
         """Render停止中のリアクション変更をDiscordの現状から復元。"""
@@ -373,7 +297,6 @@ class ProjectsCog(commands.Cog):
             except (discord.Forbidden, discord.HTTPException) as exc:
                 print(f"[Alien/Project] リアクション処理失敗: {exc}", flush=True)
                 return
-        await self.sync_member(member)
 
     @commands.Cog.listener()
     async def on_raw_reaction_add(self, payload):
@@ -384,21 +307,6 @@ class ProjectsCog(commands.Cog):
         await self.handle_raw_reaction(payload, adding=False)
 
     @commands.Cog.listener()
-    async def on_member_join(self, member):
-        if member.guild.id == self.bot.target_guild_id and not member.bot:
-            await self.sync_member(member)
-
-    @commands.Cog.listener()
-    async def on_member_update(self, before, after):
-        # 管理者ロールを付与／解除した瞬間にも通知設定を調整する。
-        if (
-            after.guild.id == self.bot.target_guild_id
-            and not after.bot
-            and is_admin(before) != is_admin(after)
-        ):
-            await self.sync_member(after)
-
-    @commands.Cog.listener()
     async def on_ready(self):
         if not self.bootstrapped:
             self.bootstrapped = True
@@ -407,8 +315,7 @@ class ProjectsCog(commands.Cog):
     async def reconcile(self):
         try:
             await self.refresh_reactions()
-            count = await self.sync_all_members()
-            print(f"[Alien/Project] 募集同期完了: 未回答者 {count} 人", flush=True)
+            print("[Alien/Project] 募集の回答状況を同期しました", flush=True)
         except Exception as exc:
             print(f"[Alien/Project] 募集同期エラー: {type(exc).__name__}: {exc}", flush=True)
 
@@ -420,42 +327,85 @@ class ProjectsCog(commands.Cog):
     async def before_reconcile(self):
         await self.bot.wait_until_ready()
 
+    async def send_workspace_reminders(self, now: datetime) -> int:
+        """公開から72時間経過した募集の未回答者に1日1回、作業場で通知。"""
+        active = await asyncio.to_thread(self.current_projects)
+        if not any(
+            project.get("created_at")
+            and project["created_at"] + timedelta(days=3) <= now
+            for project in active
+        ):
+            return 0
+
+        guild = self.bot.get_guild(self.bot.target_guild_id)
+        if guild is None:
+            print("[Alien/Project] サーバーがキャッシュにありません", flush=True)
+            return 0
+
+        today = now.astimezone(JST).date().isoformat()
+        sent_count = 0
+        async for member in guild.fetch_members(limit=None):
+            if not is_notification_target(member):
+                continue
+            if not overdue_unanswered_by_member(member.id, active, now):
+                continue
+            user_key = f"{guild.id}:{member.id}"
+            record = await asyncio.to_thread(
+                self.workspaces.find_one, {"_id": user_key}
+            )
+            if not record or not record.get("channel_id"):
+                print(f"[Alien/Project] 作業場なし member={member.id}", flush=True)
+                continue
+
+            reminder_id = f"workspace:{today}:{user_key}"
+            try:
+                await asyncio.to_thread(
+                    self.reminders.insert_one,
+                    {"_id": reminder_id, "state": "reserved",
+                     "kind": "workspace", "created_at": utcnow()},
+                )
+            except DuplicateKeyError:
+                continue
+
+            try:
+                channel = (
+                    self.bot.get_channel(record["channel_id"])
+                    or await self.bot.fetch_channel(record["channel_id"])
+                )
+                if not isinstance(channel, discord.TextChannel) or channel.guild.id != guild.id:
+                    raise RuntimeError("保存済み作業場が存在しません")
+
+                posted = await channel.send(
+                    REMINDER_TEXT,
+                    allowed_mentions=discord.AllowedMentions(
+                        everyone=True, users=False, roles=False
+                    ),
+                )
+                await asyncio.to_thread(
+                    self.reminders.update_one,
+                    {"_id": reminder_id},
+                    {"$set": {
+                        "state": "posted", "channel_id": channel.id,
+                        "message_id": posted.id,
+                        "delete_at": utcnow() + timedelta(hours=1),
+                    }},
+                )
+                sent_count += 1
+            except (discord.HTTPException, RuntimeError, OSError) as exc:
+                print(f"[Alien/Project] 作業場通知失敗 member={member.id}: {exc}", flush=True)
+                # 送れなかった場合は次回実行で再試行可能にする。
+                await asyncio.to_thread(
+                    self.reminders.delete_one, {"_id": reminder_id}
+                )
+
+        return sent_count
+
     @tasks.loop(time=dt_time(hour=18, minute=0, tzinfo=ZoneInfo("Asia/Tokyo")))
     async def remind_at_18(self):
         try:
             await self.refresh_reactions()
-            count = await self.sync_all_members()
-            if count == 0:
-                return
-            today = datetime.now(JST).date().isoformat()
-            reservation = await asyncio.to_thread(
-                self.reminders.update_one,
-                {"_id": today},
-                {"$setOnInsert": {"state": "reserved", "created_at": utcnow()}},
-                True,
-            )
-            if reservation.upserted_id is None:
-                return
-            channel = await self.get_channel()
-            role = channel.guild.get_role(PROJECT_ROLE_ID)
-            if role is None:
-                raise RuntimeError("企画募集通知ロールが存在しません")
-            sent = await channel.send(
-                f"<@&{PROJECT_ROLE_ID}>\n"
-                "まだ回答していない企画募集があります。募集メッセージにリアクションしてください。",
-                allowed_mentions=discord.AllowedMentions(
-                    everyone=False, users=False, roles=[role]
-                ),
-            )
-            await asyncio.to_thread(
-                self.reminders.update_one,
-                {"_id": today},
-                {"$set": {
-                    "state": "posted", "channel_id": sent.channel.id,
-                    "message_id": sent.id, "delete_at": utcnow() + timedelta(hours=1),
-                }},
-            )
-            print(f"[Alien/Project] 18時通知 {today}: {count}人", flush=True)
+            sent = await self.send_workspace_reminders(utcnow())
+            print(f"[Alien/Project] 18時・作業場通知: {sent}件", flush=True)
         except Exception as exc:
             print(f"[Alien/Project] 18時通知失敗: {type(exc).__name__}: {exc}", flush=True)
 
