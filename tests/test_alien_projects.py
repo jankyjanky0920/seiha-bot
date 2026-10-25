@@ -103,7 +103,7 @@ class RecruitmentTests(unittest.TestCase):
 
     def test_workspace_reminder_content(self):
         from alien_bot.cogs.projects import REMINDER_TEXT
-        self.assertTrue(REMINDER_TEXT.startswith("@everyone\\n"))
+        self.assertEqual(REMINDER_TEXT.splitlines()[0], "@everyone")
         self.assertIn("まだ回答していない企画募集があります！", REMINDER_TEXT)
         self.assertIn("<#1544209717218508882>", REMINDER_TEXT)
         self.assertIn("なんらかのリアクションを行うことで", REMINDER_TEXT)
@@ -128,6 +128,7 @@ class RecruitmentTests(unittest.TestCase):
         class FakeChannel:
             def __init__(self, guild):
                 self.guild = guild
+                self.id = 999
                 self.send = AsyncMock(
                     return_value=SimpleNamespace(id=123)
                 )
