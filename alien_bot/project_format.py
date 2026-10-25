@@ -120,7 +120,7 @@ def parse_project_form(dates_text: str, projects_text: str, now: datetime | None
     return {"slots": slots, "projects": projects, "deadline_at": deadline}
 
 
-def build_recruitment_message(data: dict, role_id: int) -> str:
+def build_recruitment_message(data: dict) -> str:
     lines = []
     for index, slot in enumerate(data["slots"]):
         d = date.fromisoformat(slot["base_date"])
@@ -145,7 +145,6 @@ def build_recruitment_message(data: dict, role_id: int) -> str:
             else f"{low}~{high}人の場合"
         )
         lines.extend([range_text, f"【{project['name']}】"])
-    lines.extend(["", f"<@&{role_id}>"])
     content = "\n".join(lines)
     if len(content) > 1700:
         raise ValueError("募集メッセージが長すぎます。日時または企画名を減らしてください。")
@@ -156,5 +155,24 @@ def unanswered_by_member(user_id: int, active_projects: list[dict]) -> bool:
     """対象者が1つでも有効な企画募集に未回答ならTrue。"""
     return any(
         not project.get("responses", {}).get(str(user_id))
+        for project in active_projects
+    )
+
+
+REMINDER_GRACE = timedelta(days=3)
+
+
+def overdue_unanswered_by_member(
+    user_id: int, active_projects: list[dict], at: datetime
+) -> bool:
+    """募集公開後72時間以上経過した有効な募集のうち、未回答があればTrue。
+
+    active_projectsは期限切れ／削除済みを含まない一覧。
+    公開日時のない旧データは誤通知防止のため対象にしない。
+    """
+    return any(
+        isinstance(project.get("created_at"), datetime)
+        and project["created_at"] + REMINDER_GRACE <= at
+        and not project.get("responses", {}).get(str(user_id))
         for project in active_projects
     )
