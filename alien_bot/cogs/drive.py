@@ -170,9 +170,7 @@ class DriveCog(commands.Cog):
                 )
                 return
             member_folder = await self.ensure_member_folder(member.id, cfg)
-            await asyncio.to_thread(self.drive.grant, cfg["common"], email, "reader")
-            await asyncio.to_thread(self.drive.grant, cfg["rules"], email, "reader")
-            await asyncio.to_thread(self.drive.grant, member_folder, email, "reader")
+            # Googleへの共有途中で失敗しても、権限の解除対象を失わない。
             await asyncio.to_thread(
                 self.members.update_one,
                 {"_id": self.member_key(member.id)},
@@ -180,9 +178,18 @@ class DriveCog(commands.Cog):
                     "email": email,
                     "user_id": str(member.id),
                     "folder_id": member_folder,
+                    "state": "pending",
                     "updated_at": utcnow(),
                 }},
                 True,
+            )
+            await asyncio.to_thread(self.drive.grant, cfg["common"], email, "reader")
+            await asyncio.to_thread(self.drive.grant, cfg["rules"], email, "reader")
+            await asyncio.to_thread(self.drive.grant, member_folder, email, "reader")
+            await asyncio.to_thread(
+                self.members.update_one,
+                {"_id": self.member_key(member.id)},
+                {"$set": {"state": "active", "updated_at": utcnow()}},
             )
             await interaction.followup.send(
                 f"{member.display_name}さんの共通素材・利用規約・本人素材フォルダを"
@@ -281,7 +288,7 @@ class DriveCog(commands.Cog):
                 self.members.find_one,
                 {"_id": self.member_key(interaction.user.id)},
             )
-            if not record and not self.admin(interaction):
+            if (not record or record.get("state") != "active") and not self.admin(interaction):
                 await interaction.response.send_message(
                     "まだDrive共有が設定されていません。管理者にGoogleアカウントの登録を依頼してください。",
                     ephemeral=True,
@@ -305,9 +312,9 @@ class DriveCog(commands.Cog):
             self.members.find_one,
             {"_id": self.member_key(interaction.user.id)},
         )
-        if not profile:
+        if not profile or profile.get("state") != "active":
             await interaction.response.send_message(
-                "Google Driveアカウントが登録されていません。",
+                "Google Driveアカウントが未登録、または共有設定中です。",
                 ephemeral=True,
             )
             return
@@ -347,6 +354,8 @@ class DriveCog(commands.Cog):
         await interaction.response.defer(ephemeral=True, thinking=True)
         try:
             name = safe_name(name)
+            if len(name) > 100:
+                raise ValueError("企画名は100文字以内で入力してください。")
             cfg = await self.require_setup()
             import uuid
             project_id = uuid.uuid4().hex[:12]
@@ -397,7 +406,7 @@ class DriveCog(commands.Cog):
             profile = await asyncio.to_thread(
                 self.members.find_one, {"_id": self.member_key(member.id)}
             )
-            if not project or not profile:
+            if not project or not profile or profile.get("state") != "active":
                 await interaction.followup.send(
                     "企画IDまたは対象メンバーのGoogle登録が見つかりません。",
                     ephemeral=True,
@@ -506,7 +515,7 @@ class DriveCog(commands.Cog):
             profile = await asyncio.to_thread(
                 self.members.find_one, {"_id": self.member_key(member.id)}
             )
-            if not profile:
+            if not profile or profile.get("state") != "active":
                 await interaction.followup.send(
                     "対象メンバーのGoogleアカウントを先に登録してください。",
                     ephemeral=True,
