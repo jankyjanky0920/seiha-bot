@@ -330,6 +330,34 @@ class PlanCog(commands.Cog):
                 ephemeral=True,
             )
 
+    @app_commands.command(
+        name="zzzadmin_plan_settle",
+        description="登録済み企画のスコア・お礼通知を安全に再試行【管理者】",
+    )
+    async def settle_retry(self, interaction: discord.Interaction, plan: str):
+        if not self.admin(interaction):
+            await interaction.response.send_message("管理者専用です。", ephemeral=True)
+            return
+        await interaction.response.defer(ephemeral=True, thinking=True)
+        try:
+            async with self.operation_lock:
+                saved = await self.find(plan)
+                await self.settle(saved)
+            await interaction.followup.send(
+                "スコアとお礼メッセージの処理を確認・再試行しました。"
+                "撮影IDによりスコアの二重付与は防止されます。",
+                ephemeral=True,
+            )
+        except Exception as exc:
+            print(
+                f"[Alien/Plan] settle retry error: {type(exc).__name__}",
+                flush=True,
+            )
+            await interaction.followup.send(
+                "再処理に失敗しました。Renderのログを確認してください。",
+                ephemeral=True,
+            )
+
     @app_commands.command(name="zzzadmin_plans", description="撮影企画と制作ステータスの一覧【管理者】")
     async def plans(self, interaction: discord.Interaction):
         if not self.admin(interaction):
