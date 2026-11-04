@@ -154,12 +154,10 @@ class ProjectsCog(commands.Cog):
         self.bootstrapped = False
         self.reconcile_loop.start()
         self.remind_at_18.start()
-        self.cleanup_loop.start()
 
     def cog_unload(self):
         self.reconcile_loop.cancel()
         self.remind_at_18.cancel()
-        self.cleanup_loop.cancel()
         self.db_client.close()
 
     def admin_permitted(self, interaction):
@@ -387,7 +385,6 @@ class ProjectsCog(commands.Cog):
                     {"$set": {
                         "state": "posted", "channel_id": channel.id,
                         "message_id": posted.id,
-                        "delete_at": utcnow() + timedelta(hours=1),
                     }},
                 )
                 sent_count += 1
@@ -413,32 +410,6 @@ class ProjectsCog(commands.Cog):
     async def before_reminder(self):
         await self.bot.wait_until_ready()
 
-    @tasks.loop(minutes=1)
-    async def cleanup_loop(self):
-        expired = await asyncio.to_thread(
-            lambda: list(self.reminders.find({
-                "state": "posted", "delete_at": {"$lte": utcnow()},
-            }).limit(20))
-        )
-        for item in expired:
-            try:
-                channel = self.bot.get_channel(item["channel_id"]) or await self.bot.fetch_channel(
-                    item["channel_id"]
-                )
-                await channel.get_partial_message(item["message_id"]).delete()
-            except discord.NotFound:
-                pass
-            except (discord.Forbidden, discord.HTTPException) as exc:
-                print(f"[Alien/Project] 1時間通知削除エラー: {exc}", flush=True)
-                continue
-            await asyncio.to_thread(
-                self.reminders.update_one,
-                {"_id": item["_id"]}, {"$set": {"state": "deleted"}},
-            )
-
-    @cleanup_loop.before_loop
-    async def before_cleanup(self):
-        await self.bot.wait_until_ready()
 
 
 async def setup(bot):

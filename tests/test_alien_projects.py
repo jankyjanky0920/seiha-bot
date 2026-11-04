@@ -176,6 +176,7 @@ class RecruitmentTests(unittest.TestCase):
         channel.send.assert_awaited_once()
         self.assertIn("workspace:2026-10-26:111:20", storage)
         self.assertEqual(storage["workspace:2026-10-26:111:20"]["state"], "posted")
+        self.assertNotIn("delete_at", storage["workspace:2026-10-26:111:20"])
 
     def test_discord_cog_import(self):
         module = import_module("alien_bot.cogs.projects")
