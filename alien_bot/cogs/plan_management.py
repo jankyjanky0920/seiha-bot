@@ -51,6 +51,7 @@ class PlanManualView(discord.ui.View):
         super().__init__(timeout=600)
         self.cog, self.author_id, self.data = cog, author_id, data
         self.complete = False
+        self.submitting = False
         self.add_item(PlanMemberSelect())
 
     async def interaction_check(self, interaction):
@@ -284,11 +285,12 @@ class PlanCog(commands.Cog):
         )
 
     async def submit_manual(self, interaction, view, selected):
-        if view.complete:
+        if view.complete or view.submitting:
             await interaction.response.send_message(
-                "すでに登録しています。", ephemeral=True,
+                "すでに登録済み、または処理中です。", ephemeral=True,
             )
             return
+        view.submitting = True
         await interaction.response.defer(ephemeral=True, thinking=True)
         try:
             participants = []
@@ -329,6 +331,8 @@ class PlanCog(commands.Cog):
                 "一部処理に失敗しました。企画IDやスコア履歴を確認してください。",
                 ephemeral=True,
             )
+        finally:
+            view.submitting = False
 
     @app_commands.command(
         name="zzzadmin_plan_settle",
@@ -497,7 +501,12 @@ class PlanCog(commands.Cog):
                 if drive_cog is not None:
                     try:
                         outcome = await drive_cog.grant_review_access(item, url)
-                        if outcome and outcome["unshared"]:
+                        if outcome is None:
+                            drive_note = (
+                                "\\nGoogle Driveの初期設定が未完了です。"
+                                "出演者への閲覧権限を手動で設定してください。"
+                            )
+                        elif outcome["unshared"]:
                             drive_note = (
                                 "\\nDriveの自動共有が未完了："
                                 + ", ".join(outcome["unshared"])
