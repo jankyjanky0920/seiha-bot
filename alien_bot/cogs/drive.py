@@ -210,8 +210,25 @@ class DriveCog(commands.Cog):
             ))
         )
         folders.extend(p["folder_id"] for p in project_entries)
+        deliveries = await asyncio.to_thread(
+            lambda: list(self.deliveries.find({
+                "guild_id": self.bot.target_guild_id,
+                "user_id": str(user_id),
+            }))
+        )
+        folders.extend(d["file_id"] for d in deliveries)
         for folder_id in dict.fromkeys(folders):
             await asyncio.to_thread(self.drive.revoke, folder_id, email)
+        # 共有解除に成功した場合のみ、サーバー内の紐付けを更新する。
+        await asyncio.to_thread(
+            self.projects.update_many,
+            {"guild_id": self.bot.target_guild_id, "member_ids": str(user_id)},
+            {"$pull": {"member_ids": str(user_id)}},
+        )
+        await asyncio.to_thread(
+            self.deliveries.delete_many,
+            {"guild_id": self.bot.target_guild_id, "user_id": str(user_id)},
+        )
         await asyncio.to_thread(
             self.members.delete_one, {"_id": self.member_key(user_id)}
         )
