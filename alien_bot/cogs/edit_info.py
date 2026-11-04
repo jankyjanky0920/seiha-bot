@@ -276,6 +276,16 @@ class EditInfoCog(commands.Cog):
                     },
                     True,
                 )
+            # Color/立ち絵/Nameが全員そろった企画は自動で「編集中」へ進める。
+            plan_cog = self.bot.get_cog("PlanCog")
+            if plan_cog is not None:
+                try:
+                    await plan_cog.refresh_member(member.id)
+                except Exception as exc:
+                    print(
+                        f"[Alien/EditInfo] 企画の素材確認更新失敗: {type(exc).__name__}",
+                        flush=True,
+                    )
             # Drive連携が有効な場合、Discord保管画像を安全に転送予約する。
             # Driveの一時障害は提出完了や既存のDiscord画像保管に影響しない。
             drive_cog = self.bot.get_cog("DriveCog")
