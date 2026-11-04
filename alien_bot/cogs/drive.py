@@ -559,6 +559,57 @@ class DriveCog(commands.Cog):
                 "完成動画の共有に失敗しました。", ephemeral=True,
             )
 
+    @app_commands.command(
+        name="zzzadmin_drive_sync",
+        description="過去の/edit_info画像をDriveへ転送予約【管理者】",
+    )
+    async def sync_old_edit_images(self, interaction: discord.Interaction):
+        if not self.admin(interaction):
+            await interaction.response.send_message("管理者専用です。", ephemeral=True)
+            return
+        await interaction.response.defer(thinking=True, ephemeral=True)
+        try:
+            await self.require_setup()
+            source = self.client[DB_NAME]["edit_profiles"]
+            profiles = await asyncio.to_thread(
+                lambda: list(source.find({"pictures.0": {"$exists": True}}))
+            )
+            count = 0
+            for profile in profiles:
+                member_id = int(profile.get("user_id") or profile["_id"].split(":")[-1])
+                for item in profile.get("pictures", []):
+                    if not all(k in item for k in (
+                        "message_id", "channel_id", "attachment_id", "filename"
+                    )):
+                        continue
+                    job_id = f"edit:{self.bot.target_guild_id}:{item['attachment_id']}"
+                    result = await asyncio.to_thread(
+                        self.jobs.update_one, {"_id": job_id},
+                        {"$setOnInsert": {
+                            "guild_id": self.bot.target_guild_id,
+                            "user_id": str(member_id),
+                            "channel_id": item["channel_id"],
+                            "message_id": item["message_id"],
+                            "attachment_id": item["attachment_id"],
+                            "filename": item["filename"],
+                            "created_at": utcnow(),
+                            "state": "queued",
+                        }}, True,
+                    )
+                    if result.upserted_id:
+                        count += 1
+            asyncio.create_task(self.process_import_jobs(limit=8))
+            await interaction.followup.send(
+                f"過去の提出画像を{count}件、新たに転送予約しました。"
+                "既存の転送済み画像は重複登録しません。",
+                ephemeral=True,
+            )
+        except Exception as exc:
+            print(f"[Alien/Drive] historic sync error: {type(exc).__name__}", flush=True)
+            await interaction.followup.send(
+                "過去画像の転送予約に失敗しました。", ephemeral=True,
+            )
+
     async def enqueue_archived_pictures(self, member_id: int, archive_message):
         for a in archive_message.attachments:
             job_id = f"edit:{self.bot.target_guild_id}:{a.id}"
