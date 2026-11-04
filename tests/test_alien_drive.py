@@ -75,12 +75,68 @@ class DrivePolicyTests(unittest.TestCase):
             "zzzadmin_drive_revoke", "zzzadmin_drive_project",
             "zzzadmin_drive_project_access", "zzzadmin_drive_projects",
             "zzzadmin_drive_upload", "zzzadmin_drive_finished_access",
-            "files", "my_files",
+            "zzzadmin_drive_sync", "files", "my_files",
         )
         actual = {cmd.name for cmd in DriveCog.__dict__.values()
                   if hasattr(cmd, "name") and hasattr(cmd, "callback")}
         for name in names:
             self.assertIn(name, actual)
+
+    def test_edit_images_are_queued_then_uploaded_once(self):
+        from alien_bot.cogs.drive import DriveCog
+
+        class Collection:
+            def __init__(self):
+                self.rows = {}
+
+            def update_one(self, query, update, upsert=False):
+                key = query["_id"]
+                if key not in self.rows and "$setOnInsert" in update:
+                    self.rows[key] = dict(update["$setOnInsert"], _id=key)
+                if "$set" in update:
+                    self.rows[key].update(update["$set"])
+                return SimpleNamespace(upserted_id=key)
+
+            def find(self, query):
+                data = [r for r in self.rows.values() if r["state"] == "queued"]
+                return SimpleNamespace(limit=lambda n: data[:n])
+
+        async def check():
+            cog = object.__new__(DriveCog)
+            cog.bot = SimpleNamespace(target_guild_id=123)
+            cog.jobs = Collection()
+            cog.import_lock = asyncio.Lock()
+            cog.configured = AsyncMock(return_value={"members": "M"})
+            cog.ensure_member_folder = AsyncMock(return_value="personalFolder")
+            cog.drive = SimpleNamespace(
+                find_file=Mock(return_value=None),
+                upload_bytes=Mock(return_value={"id": "GoogleFile"}),
+            )
+            asset = SimpleNamespace(
+                id=555, filename="face.png", content_type="image/png",
+                read=AsyncMock(return_value=b"image-bytes"),
+            )
+            archive = SimpleNamespace(
+                channel=SimpleNamespace(id=777), id=888,
+                attachments=[asset],
+            )
+            channel = SimpleNamespace(
+                fetch_message=AsyncMock(return_value=archive)
+            )
+            cog.bot.get_channel = lambda channel_id: channel
+            await cog.enqueue_archived_pictures(42, archive)
+            self.assertEqual(len(cog.jobs.rows), 1)
+            self.assertEqual(await cog.process_import_jobs(limit=5), 1)
+            self.assertEqual(await cog.process_import_jobs(limit=5), 0)
+            self.assertEqual(
+                cog.jobs.rows["edit:123:555"]["drive_file_id"], "GoogleFile"
+            )
+            cog.drive.upload_bytes.assert_called_once()
+            args = cog.drive.upload_bytes.call_args.args
+            self.assertEqual(args[0], "personalFolder")
+            self.assertEqual(args[1], "555_face.png")
+            self.assertEqual(args[2], b"image-bytes")
+        asyncio.run(check())
 
     def test_drive_finished_sharing_checks_parent_before_grant(self):
         from alien_bot.cogs.drive import DriveCog
