@@ -205,6 +205,48 @@ class TestProductionPlans(unittest.TestCase):
             )
         asyncio.run(check())
 
+    def test_early_departure_confirmation_defers_score(self):
+        from alien_bot.cogs.shooting import ShootingCog
+        from alien_bot.score_store import ADMIN_CHANNEL_ID
+
+        async def run():
+            start = datetime(2026, 11, 4, 10, tzinfo=timezone.utc)
+            confirm = {
+                "_id": "confirmA", "state": "pending", "shoot_id": "shoot1",
+                "kind": "leave", "user_id": "42",
+                "seen_at": start + timedelta(minutes=30),
+            }
+            current = {
+                "_id": "current", "phase": "running", "shoot_id": "shoot1",
+                "participants": {"42": {
+                    "joined_at": start, "ended_at": None,
+                }},
+            }
+            cog = object.__new__(ShootingCog)
+            cog.lock = asyncio.Lock()
+            cog.permitted = Mock(return_value=True)
+            cog.store = SimpleNamespace(
+                grant_shoot=Mock(),
+                shoots=SimpleNamespace(
+                    find_one=Mock(return_value=current), update_one=Mock(),
+                ),
+                confirmations=SimpleNamespace(
+                    find_one=Mock(return_value=confirm), update_one=Mock(),
+                ),
+            )
+            interaction = SimpleNamespace(
+                channel_id=ADMIN_CHANNEL_ID,
+                response=SimpleNamespace(defer=AsyncMock()),
+                followup=SimpleNamespace(send=AsyncMock()),
+                message=SimpleNamespace(id=333, edit=AsyncMock()),
+            )
+            await cog.confirm_shoot_change(interaction)
+            cog.store.grant_shoot.assert_not_called()
+            self.assertIn(
+                "企画名登録後", interaction.followup.send.call_args.args[0]
+            )
+        asyncio.run(run())
+
     def test_shootfinish_does_not_grant_before_name(self):
         from alien_bot.cogs.shooting import ShootingCog
         class Store:
