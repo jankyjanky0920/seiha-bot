@@ -77,6 +77,105 @@ class DriveCog(commands.Cog):
             self.drive.ensure_folder, name, cfg["members"]
         )
 
+    async def ensure_plan_project(self, plan):
+        """制作企画に1:1のDriveフォルダを割り当て、登録済み出演者だけに共有。"""
+        cfg = await self.configured()
+        if not cfg:
+            return None
+        key = self.project_key(plan["_id"])
+        async with self.provision_lock:
+            stored = await asyncio.to_thread(
+                self.projects.find_one, {"_id": key}
+            )
+            if not stored:
+                folder_name = safe_name(
+                    (plan["_id"] + "_" + plan["name"])[:115]
+                )
+                folder = await asyncio.to_thread(
+                    self.drive.ensure_folder, folder_name, cfg["projects"]
+                )
+                await asyncio.to_thread(
+                    self.projects.update_one,
+                    {"_id": key},
+                    {"$setOnInsert": {
+                        "guild_id": self.bot.target_guild_id,
+                        "project_id": plan["_id"],
+                        "name": plan["name"],
+                        "folder_id": folder,
+                        "member_ids": [],
+                        "created_at": utcnow(),
+                        "production_plan": True,
+                    }}, True,
+                )
+                stored = await asyncio.to_thread(
+                    self.projects.find_one, {"_id": key}
+                )
+
+            for uid in plan["member_ids"]:
+                profile = await asyncio.to_thread(
+                    self.members.find_one, {"_id": self.member_key(int(uid))}
+                )
+                if not profile or profile.get("state") != "active":
+                    continue
+                await asyncio.to_thread(
+                    self.drive.grant, stored["folder_id"],
+                    profile["email"], "reader",
+                )
+                await asyncio.to_thread(
+                    self.projects.update_one,
+                    {"_id": key},
+                    {"$addToSet": {"member_ids": str(uid)}},
+                )
+            return stored["folder_id"]
+
+    async def grant_review_access(self, plan, review_url: str):
+        """Bot管理下にあるGoogle Drive動画なら、出演者のみ閲覧権限を付与。"""
+        import re
+        from urllib.parse import urlsplit, parse_qs
+
+        cfg = await self.configured()
+        if not cfg:
+            return None
+        parsed = urlsplit(review_url)
+        # Google DriveのファイルリンクからIDを抽出する。
+        match = re.search(r"/(?:file/)?d/([A-Za-z0-9_-]+)", parsed.path)
+        params = parse_qs(parsed.query)
+        file_id = match.group(1) if match else (params.get("id") or [None])[0]
+        if not file_id or not re.fullmatch(r"[A-Za-z0-9_-]{8,}", file_id):
+            return {"shared": 0, "unshared": list(plan["member_ids"]),
+                    "reason": "リンクからDriveのファイルIDを取得できません"}
+
+        info = await asyncio.to_thread(self.drive.file_info, file_id)
+        folder = await asyncio.to_thread(
+            self.projects.find_one, {"_id": self.project_key(plan["_id"])}
+        )
+        allowed_parents = {cfg["completed"]}
+        if folder:
+            allowed_parents.add(folder["folder_id"])
+        if not allowed_parents.intersection(info.get("parents", [])):
+            raise ValueError("Botが管理する完成動画・企画フォルダのファイルではありません。")
+
+        shared, unshared = 0, []
+        for uid in plan["member_ids"]:
+            profile = await asyncio.to_thread(
+                self.members.find_one, {"_id": self.member_key(int(uid))}
+            )
+            if not profile or profile.get("state") != "active":
+                unshared.append(uid)
+                continue
+            try:
+                await asyncio.to_thread(
+                    self.drive.grant, file_id, profile["email"], "reader"
+                )
+                shared += 1
+            except Exception as exc:
+                print(
+                    f"[Alien/Drive] 確認用動画の共有失敗 member={uid}: "
+                    f"{type(exc).__name__}", flush=True,
+                )
+                unshared.append(uid)
+        return {"shared": shared, "unshared": unshared, "reason": ""}
+
     @app_commands.command(
         name="zzzadmin_drive_setup",
         description="Google Driveの制作フォルダを初期作成【管理者】",
@@ -191,6 +290,22 @@ class DriveCog(commands.Cog):
                 {"_id": self.member_key(member.id)},
                 {"$set": {"state": "active", "updated_at": utcnow()}},
             )
+            # アカウント登録以前に作られた撮影企画にも参加者として共有する。
+            plan_source = self.client[DB_NAME]["production_plans"]
+            all_plans = await asyncio.to_thread(
+                lambda: list(plan_source.find({
+                    "guild_id": self.bot.target_guild_id,
+                    "member_ids": str(member.id),
+                }).limit(100))
+            )
+            for plan in all_plans:
+                try:
+                    await self.ensure_plan_project(plan)
+                except Exception as exc:
+                    print(
+                        f"[Alien/Drive] 既存企画の権限付与失敗: {type(exc).__name__}",
+                        flush=True,
+                    )
             await interaction.followup.send(
                 f"{member.display_name}さんの共通素材・利用規約・本人素材フォルダを"
                 "Googleアカウント宛てに共有しました。", ephemeral=True,
