@@ -220,6 +220,7 @@ GOOGLE_DRIVE_REFRESH_TOKEN=(ローカルPCで取得した値)
 | `/zzzadmin_drive_revoke member` | 管理者 | 当該メンバーの共通・個人・企画・配布済み完成動画への権限を解除 |
 | `/zzzadmin_drive_project name` | 管理者 | 関係者専用の企画フォルダを新規作成し、企画IDを返す |
 | `/zzzadmin_drive_project_access project_id member role` | 管理者 | 企画ごとに閲覧者／編集者を追加 |
+| `/zzzadmin_drive_project_remove project_id member` | 管理者 | 企画から外れた人の、その企画の閲覧／編集権限だけを解除 |
 | `/zzzadmin_drive_projects` | 管理者 | 企画IDとフォルダの一覧 |
 | `/zzzadmin_drive_upload area attachment` | 管理者 | 共通素材・利用規約・完成動画（20MB以下）を直接保存し、ファイルIDを返す |
 | `/zzzadmin_drive_finished_access file_id member` | 管理者 | Botが保存した完成動画を指定したGoogleアカウントにだけ共有・作業場へ通知 |
