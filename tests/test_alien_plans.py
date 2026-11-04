@@ -125,7 +125,8 @@ class TestProductionPlans(unittest.TestCase):
         expected = (
             "zzzadmin_planinfo", "zzzadin_planinfo",
             "zzzadmin_plans", "zzzadmin_plan",
-            "zzzadmin_plan_refresh", "zzzadmin_plan_review",
+            "zzzadmin_plan_refresh", "zzzadmin_plan_settle",
+            "zzzadmin_plan_review",
             "zzzadmin_plan_collab", "zzzadmin_plan_posted",
         )
         names = {cmd.name for cmd in PlanCog.__dict__.values()
@@ -139,6 +140,70 @@ class TestProductionPlans(unittest.TestCase):
         view = PlanManualView(SimpleNamespace(), 123, {})
         self.assertEqual(len(view.children), 1)
         self.assertEqual(view.children[0].max_values, 25)
+
+    def test_review_yes_and_no_request(self):
+        from alien_bot.cogs.plan_management import PlanCog, RevisionModal
+
+        async def check():
+            cog = object.__new__(PlanCog)
+            cog.review_target = AsyncMock(return_value={
+                "plan_id": "shoot_A",
+                "version": 2, "member_id": "20", "message_id": 888,
+            })
+            cog.submit_review = AsyncMock()
+            interaction = SimpleNamespace(
+                response=SimpleNamespace(send_modal=AsyncMock()),
+            )
+            await cog.vote_review(interaction, False)
+            submitted_modal = interaction.response.send_modal.call_args.args[0]
+            self.assertIsInstance(submitted_modal, RevisionModal)
+            self.assertEqual(submitted_modal.plan_id, "shoot_A")
+            await cog.vote_review(interaction, True)
+            cog.submit_review.assert_awaited_once_with(
+                interaction, "shoot_A", 2, "20", 888, True, "",
+            )
+        asyncio.run(check())
+
+    def test_register_shoot_name_marks_finished(self):
+        from alien_bot.cogs.shooting import ShootingCog
+
+        async def check():
+            started = datetime(2026, 11, 4, 10, tzinfo=timezone.utc)
+            current = {
+                "_id": "current", "phase": "awaiting_name",
+                "shoot_id": "shootABC", "guild_id": 123,
+                "started_at": started, "ended_at": started + timedelta(minutes=69),
+                "participants": {"10": {
+                    "joined_at": started, "ended_at": None,
+                }},
+            }
+            plan = {
+                "_id": "shootABC", "name": "実験A",
+                "member_ids": ["10"], "status": STATUS_WAIT,
+            }
+            manager = SimpleNamespace(new_plan=AsyncMock(return_value=plan))
+            cog = object.__new__(ShootingCog)
+            cog.lock = asyncio.Lock()
+            cog.permitted = Mock(return_value=True)
+            cog.store = SimpleNamespace(shoots=SimpleNamespace(
+                find_one=Mock(return_value=current),
+                update_one=Mock(),
+            ))
+            cog.bot = SimpleNamespace(get_cog=lambda name: manager)
+            interaction = SimpleNamespace(
+                response=SimpleNamespace(defer=AsyncMock()),
+                followup=SimpleNamespace(send=AsyncMock()),
+            )
+            await cog.finish_with_name(interaction, "実験A")
+            manager.new_plan.assert_awaited_once()
+            self.assertEqual(
+                cog.store.shoots.update_one.call_args.args[1]["$set"]["phase"],
+                "finished",
+            )
+            self.assertIn(
+                "実験A", interaction.followup.send.call_args.args[0]
+            )
+        asyncio.run(check())
 
     def test_shootfinish_does_not_grant_before_name(self):
         from alien_bot.cogs.shooting import ShootingCog
