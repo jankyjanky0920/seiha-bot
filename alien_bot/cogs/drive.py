@@ -31,6 +31,7 @@ class DriveCog(commands.Cog):
         self.members = db["drive_members"]
         self.projects = db["drive_projects"]
         self.jobs = db["drive_upload_jobs"]
+        self.deliveries = db["drive_deliveries"]
         self.drive = DriveClient()
         self.provision_lock = asyncio.Lock()
         self.import_lock = asyncio.Lock()
@@ -135,9 +136,9 @@ class DriveCog(commands.Cog):
         self, interaction: discord.Interaction,
         member: discord.Member, email: str,
     ):
-        if not self.admin(interaction) or member.bot or is_admin(member):
+        if not self.admin(interaction) or member.bot:
             await interaction.response.send_message(
-                "管理者のみ、一般メンバーのGoogleメールを登録できます。",
+                "管理者のみ、Bot以外のメンバーのGoogleメールを登録できます。",
                 ephemeral=True,
             )
             return
@@ -299,7 +300,17 @@ class DriveCog(commands.Cog):
                 "member_ids": str(interaction.user.id),
             }).limit(15))
         )
+        deliveries = await asyncio.to_thread(
+            lambda: list(self.deliveries.find({
+                "guild_id": self.bot.target_guild_id,
+                "user_id": str(interaction.user.id),
+            }).limit(10))
+        )
         lines = ["**個人素材** " + folder_url(profile["folder_id"])]
+        for d in deliveries:
+            lines.append(
+                f"**完成動画：{discord.utils.escape_markdown(d['name'])}** {d['url']}"
+            )
         for p in projects:
             lines.append(f"**{discord.utils.escape_markdown(p['name'])}** "
                          + folder_url(p["folder_id"]))
@@ -449,6 +460,7 @@ class DriveCog(commands.Cog):
             await interaction.followup.send(
                 "Driveへの保存が完了しました。\n"
                 + folder_url(cfg[area.value])
+                + f"\nファイルID: `{result['id']}`"
                 + "\n※動画は通常、DriveのWeb画面からの直接アップロードが便利です。",
                 ephemeral=True,
             )
@@ -456,24 +468,79 @@ class DriveCog(commands.Cog):
             print(f"[Alien/Drive] upload error: {type(exc).__name__}", flush=True)
             await interaction.followup.send("Driveへの保存に失敗しました。", ephemeral=True)
 
-    async def queue_edit_images(self, member_id: int, attachments):
-        """編集情報の提出がDB保存されたあとに、Drive転送ジョブを永続記録。"""
-        for a in attachments:
-            job_id = f"edit:{self.bot.target_guild_id}:{a.id}"
+    @app_commands.command(
+        name="zzzadmin_drive_finished_access",
+        description="完成動画を指定メンバーだけに共有【管理者】",
+    )
+    @app_commands.describe(
+        file_id="Botが保存した完成動画のファイルID",
+        member="共有するDiscordメンバー",
+    )
+    async def finished_access(
+        self, interaction: discord.Interaction, file_id: str,
+        member: discord.Member,
+    ):
+        if not self.admin(interaction) or member.bot:
+            await interaction.response.send_message("管理者専用です。", ephemeral=True)
+            return
+        await interaction.response.defer(ephemeral=True, thinking=True)
+        try:
+            cfg = await self.require_setup()
+            profile = await asyncio.to_thread(
+                self.members.find_one, {"_id": self.member_key(member.id)}
+            )
+            if not profile:
+                await interaction.followup.send(
+                    "対象メンバーのGoogleアカウントを先に登録してください。",
+                    ephemeral=True,
+                )
+                return
+            info = await asyncio.to_thread(self.drive.file_info, file_id)
+            if cfg["completed"] not in info.get("parents", []):
+                await interaction.followup.send(
+                    "このファイルはBotが管理する完成動画フォルダ直下にありません。",
+                    ephemeral=True,
+                )
+                return
+            await asyncio.to_thread(self.drive.grant, file_id, profile["email"], "reader")
+            url = info.get("webViewLink") or f"https://drive.google.com/file/d/{file_id}/view"
             await asyncio.to_thread(
-                self.jobs.update_one, {"_id": job_id},
-                {"$setOnInsert": {
+                self.deliveries.update_one,
+                {"_id": f"{self.member_key(member.id)}:{file_id}"},
+                {"$set": {
                     "guild_id": self.bot.target_guild_id,
-                    "user_id": str(member_id),
-                    "channel_id": a.message.channel.id if getattr(a, "message", None) else None,
-                    "attachment_id": str(a.id),
-                    "filename": a.filename,
-                    "created_at": utcnow(),
-                    "state": "queued",
+                    "user_id": str(member.id),
+                    "file_id": file_id, "name": info.get("name", ""),
+                    "url": url, "granted_at": utcnow(),
                 }}, True,
             )
-        # 画像メッセージIDは呼び出し元が渡すこと（Attachmentからは取得できない）。
-        return len(attachments)
+            workspaces = self.client[DB_NAME]["workspaces"]
+            workspace = await asyncio.to_thread(
+                workspaces.find_one, {"_id": self.member_key(member.id)}
+            )
+            if workspace and workspace.get("channel_id"):
+                try:
+                    channel = self.bot.get_channel(workspace["channel_id"]) or await self.bot.fetch_channel(
+                        workspace["channel_id"]
+                    )
+                    await channel.send(
+                        f"完成動画を共有しました：{url}",
+                        allowed_mentions=discord.AllowedMentions.none(),
+                    )
+                except (discord.HTTPException, RuntimeError) as exc:
+                    print(
+                        f"[Alien/Drive] 完成動画の作業場通知失敗: {type(exc).__name__}",
+                        flush=True,
+                    )
+            await interaction.followup.send(
+                "完成動画の閲覧権限を対象者に付与しました。",
+                ephemeral=True,
+            )
+        except Exception as exc:
+            print(f"[Alien/Drive] finished share error: {type(exc).__name__}", flush=True)
+            await interaction.followup.send(
+                "完成動画の共有に失敗しました。", ephemeral=True,
+            )
 
     async def enqueue_archived_pictures(self, member_id: int, archive_message):
         for a in archive_message.attachments:
