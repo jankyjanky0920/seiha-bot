@@ -48,7 +48,7 @@ class AlienBot(commands.Bot):
             if module.name == "server_management" and not self.management_enabled:
                 print("[Alien] サーバー管理機能は設定待ちのため無効", flush=True)
                 continue
-            if module.name in ("shooting", "shop") and not self.economy_enabled:
+            if module.name in ("shooting", "shop", "plan_management") and not self.economy_enabled:
                 print(f"[Alien] {module.name} は設定待ちのため無効", flush=True)
                 continue
             if module.name == "projects" and not self.projects_enabled:
