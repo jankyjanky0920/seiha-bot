@@ -169,7 +169,7 @@ class TestProductionPlans(unittest.TestCase):
             cog.store.grant_shoot.assert_not_called()
             cog.store.shoots.update_one.assert_called_once()
             self.assertEqual(
-                cog.store.shoots.update_one.call_args.args[2]["$set"]["phase"],
+                cog.store.shoots.update_one.call_args.args[1]["$set"]["phase"],
                 "awaiting_name",
             )
             message = interaction.followup.send.call_args.args[0]
