@@ -139,9 +139,11 @@ class ProductionStore:
 
     def add(self, record: dict) -> dict:
         """idempotent: 同じ撮影IDの別名登録を拒否。"""
+        # _idはフィルターに指定済みなので、更新オペレーターには含めない。
+        insert_fields = {key: value for key, value in record.items() if key != "_id"}
         self.plans.update_one(
             {"_id": record["_id"]},
-            {"$setOnInsert": record},
+            {"$setOnInsert": insert_fields},
             upsert=True,
         )
         existing = self.plans.find_one({"_id": record["_id"]})
