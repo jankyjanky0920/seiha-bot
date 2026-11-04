@@ -73,7 +73,8 @@ class DrivePolicyTests(unittest.TestCase):
         names = (
             "zzzadmin_drive_setup", "zzzadmin_drive_member",
             "zzzadmin_drive_revoke", "zzzadmin_drive_project",
-            "zzzadmin_drive_project_access", "zzzadmin_drive_projects",
+            "zzzadmin_drive_project_access", "zzzadmin_drive_project_remove",
+            "zzzadmin_drive_projects",
             "zzzadmin_drive_upload", "zzzadmin_drive_finished_access",
             "zzzadmin_drive_sync", "files", "my_files",
         )
