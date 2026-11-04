@@ -236,6 +236,7 @@ class TestProductionPlans(unittest.TestCase):
             )
             interaction = SimpleNamespace(
                 channel_id=ADMIN_CHANNEL_ID,
+                user=SimpleNamespace(id=999),
                 response=SimpleNamespace(defer=AsyncMock()),
                 followup=SimpleNamespace(send=AsyncMock()),
                 message=SimpleNamespace(id=333, edit=AsyncMock()),
