@@ -1,4 +1,4 @@
-"""撮影時間の記録、途中参加・早退Yes確認、スコア付与。"""
+"""撮影時間の記録、途中参加・早退確認、企画名確定後のスコア付与。"""
 
 import asyncio
 from uuid import uuid4
@@ -24,6 +24,33 @@ class ShootingYesView(discord.ui.View):
     )
     async def yes(self, interaction: discord.Interaction, button: discord.ui.Button):
         await self.cog.confirm_shoot_change(interaction)
+
+
+class ShootNameModal(discord.ui.Modal, title="撮影した企画の名前を入力"):
+    name = discord.ui.TextInput(
+        label="企画名", max_length=100,
+        placeholder="例：AI vs 人間 コードネーム対決", required=True,
+    )
+
+    def __init__(self, cog):
+        super().__init__(timeout=600)
+        self.cog = cog
+
+    async def on_submit(self, interaction: discord.Interaction):
+        await self.cog.finish_with_name(interaction, str(self.name))
+
+
+class ShootNameView(discord.ui.View):
+    def __init__(self, cog):
+        super().__init__(timeout=600)
+        self.cog = cog
+
+    @discord.ui.button(label="企画名を入力する", style=discord.ButtonStyle.success)
+    async def name(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if not self.cog.permitted(interaction):
+            await interaction.response.send_message("管理者専用です。", ephemeral=True)
+            return
+        await interaction.response.send_modal(ShootNameModal(self.cog))
 
 
 class ShootingCog(commands.Cog):
@@ -71,9 +98,9 @@ class ShootingCog(commands.Cog):
                 prior = await asyncio.to_thread(
                     self.store.shoots.find_one, {"_id": "current"}
                 )
-                if prior and prior.get("phase") in ("running", "finalizing"):
+                if prior and prior.get("phase") in ("running", "finalizing", "awaiting_name"):
                     await interaction.followup.send(
-                        "すでに撮影中、または前回の撮影の精算途中です。先に /zzzadmin_shootfinish を実行してください。",
+                        "すでに撮影中、または前回の撮影の企画名が未登録です。先に /zzzadmin_shootfinish で企画名を登録してください。",
                         ephemeral=True,
                     )
                     return
@@ -128,10 +155,15 @@ class ShootingCog(commands.Cog):
                     ephemeral=True,
                 )
 
-    @app_commands.command(name="zzzadmin_shootfinish", description="撮影を終了してスコアを確定します【管理者】")
+    @app_commands.command(
+        name="zzzadmin_shootfinish",
+        description="撮影を終了し、次に企画名を登録します【管理者】",
+    )
     async def shootfinish(self, interaction: discord.Interaction):
         if not self.permitted(interaction):
-            await interaction.response.send_message("管理者専用コマンドです。", ephemeral=True)
+            await interaction.response.send_message(
+                "管理者専用コマンドです。", ephemeral=True,
+            )
             return
         await interaction.response.defer(ephemeral=True, thinking=True)
         async with self.lock:
@@ -139,35 +171,34 @@ class ShootingCog(commands.Cog):
                 shoot = await asyncio.to_thread(
                     self.store.shoots.find_one, {"_id": "current"}
                 )
-                if not shoot or shoot["phase"] == "finished":
-                    await interaction.followup.send("記録中の撮影はありません。", ephemeral=True)
+                if not shoot or shoot.get("phase") == "finished":
+                    await interaction.followup.send(
+                        "記録中・企画名入力待ちの撮影はありません。",
+                        ephemeral=True,
+                    )
                     return
                 if shoot["phase"] == "running":
-                    end = utcnow()
+                    end_at = utcnow()
                     await asyncio.to_thread(
                         self.store.shoots.update_one,
                         {"_id": "current", "phase": "running"},
-                        {"$set": {"phase": "finalizing", "ended_at": end}},
+                        {"$set": {
+                            "phase": "awaiting_name", "ended_at": end_at,
+                        }},
                     )
-                    shoot["phase"], shoot["ended_at"] = "finalizing", end
+                    shoot["phase"] = "awaiting_name"
+                    shoot["ended_at"] = end_at
+                elif shoot["phase"] == "finalizing":
+                    # 以前のバージョンで保存された精算途中も企画として回収する。
+                    await asyncio.to_thread(
+                        self.store.shoots.update_one,
+                        {"_id": "current", "phase": "finalizing"},
+                        {"$set": {"phase": "awaiting_name"}},
+                    )
+                    shoot["phase"] = "awaiting_name"
+                elif shoot["phase"] != "awaiting_name":
+                    raise RuntimeError("撮影の状態が不正です。")
 
-                results = []
-                for uid, item in shoot["participants"].items():
-                    minutes, amount, newly = await asyncio.to_thread(
-                        self.store.grant_shoot, int(uid), shoot["shoot_id"],
-                        item["joined_at"], item.get("ended_at") or shoot["ended_at"],
-                    )
-                    results.append((int(uid), minutes, amount, newly))
-                    if newly:
-                        await self.notify_worker(
-                            interaction.guild.id, int(uid),
-                            f"🎬 撮影協力ありがとうございました！ {minutes}分 → **{score_text(amount)} スコア** 獲得しました。",
-                        )
-                await asyncio.to_thread(
-                    self.store.shoots.update_one,
-                    {"_id": "current", "shoot_id": shoot["shoot_id"]},
-                    {"$set": {"phase": "finished"}},
-                )
                 await asyncio.to_thread(
                     self.store.confirmations.update_many,
                     {"shoot_id": shoot["shoot_id"], "state": "pending"},
@@ -176,26 +207,91 @@ class ShootingCog(commands.Cog):
                 if interaction.guild.voice_client:
                     try:
                         await interaction.guild.voice_client.disconnect(force=True)
-                    except discord.HTTPException as err:
-                        print(f"[Alien/Shoot] VC退出失敗: {err}", flush=True)
-                status_error = await self.set_status(shoot["channel_id"], "撮影終了")
-                report = "\n".join(
-                    f"<@{uid}>：{minutes}分 / +{score_text(amount)} スコア"
-                    for uid, minutes, amount, _ in results
-                ) or "協力者なし"
+                    except discord.HTTPException as exc:
+                        print(f"[Alien/Shoot] VC退出失敗: {exc}", flush=True)
+                await self.set_status(shoot["channel_id"], "撮影終了")
                 await interaction.followup.send(
-                    "撮影を終了しました。\n" + report +
-                    ("\n※チャンネルステータスを変更できませんでした。" if status_error else ""),
+                    f"撮影を終了しました。（撮影ID：`{shoot['shoot_id']}`）\n"
+                    "**続いて企画名を入力してください。**\n"
+                    "スコア付与と出演者へのお礼メッセージは、"
+                    "企画名を登録した後に実行します。\n"
+                    "画面を閉じた場合は /zzzadmin_shootname から再開できます。",
+                    view=ShootNameView(self), ephemeral=True,
+                )
+            except Exception as exc:
+                print(f"[Alien/Shoot] 終了処理失敗: {type(exc).__name__}: {exc}", flush=True)
+                await interaction.followup.send(
+                    "撮影終了処理に失敗しました。再度 /zzzadmin_shootfinish を実行してください。",
+                    ephemeral=True,
+                )
+
+    @app_commands.command(
+        name="zzzadmin_shootname",
+        description="終了済み撮影の企画名を登録しスコアを付与【管理者】",
+    )
+    async def shootname(self, interaction: discord.Interaction, name: str):
+        if not self.permitted(interaction):
+            await interaction.response.send_message("管理者専用です。", ephemeral=True)
+            return
+        await interaction.response.defer(ephemeral=True, thinking=True)
+        await self.finish_with_name(interaction, name, deferred=True)
+
+    async def finish_with_name(self, interaction, name: str, *, deferred: bool = False):
+        from alien_bot.production_plans import normalize_name, voice_plan, STATUS_LABELS
+
+        if not self.permitted(interaction):
+            if deferred:
+                await interaction.followup.send("管理者専用です。", ephemeral=True)
+            else:
+                await interaction.response.send_message("管理者専用です。", ephemeral=True)
+            return
+        if not deferred:
+            await interaction.response.defer(ephemeral=True, thinking=True)
+        try:
+            name = normalize_name(name)
+            async with self.lock:
+                session = await asyncio.to_thread(
+                    self.store.shoots.find_one,
+                    {"_id": "current", "phase": "awaiting_name"},
+                )
+                if not session:
+                    await interaction.followup.send(
+                        "企画名を登録する撮影がありません。", ephemeral=True,
+                    )
+                    return
+                manager = self.bot.get_cog("PlanCog")
+                if manager is None:
+                    raise RuntimeError("企画管理機能が有効になっていません")
+                record = voice_plan(session, name)
+                plan = await manager.new_plan(record, shoot=session)
+                await asyncio.to_thread(
+                    self.store.shoots.update_one,
+                    {"_id": "current", "shoot_id": session["shoot_id"],
+                     "phase": "awaiting_name"},
+                    {"$set": {
+                        "phase": "finished", "plan_id": plan["_id"],
+                        "plan_name": plan["name"],
+                    }},
+                )
+                await interaction.followup.send(
+                    f"🎬【{plan['name']}】を登録しました！\n"
+                    f"企画ID: `{plan['_id']}`\n"
+                    f"撮影協力者：{len(plan['member_ids'])}人\n"
+                    f"ステータス：{STATUS_LABELS[plan['status']]}\n"
+                    "スコア付与と企画名入りのお礼メッセージを処理しました。",
                     ephemeral=True,
                     allowed_mentions=discord.AllowedMentions.none(),
                 )
-                print(f"[Alien/Shoot] FINISH {shoot['shoot_id']} members={len(results)}", flush=True)
-            except Exception as err:
-                print(f"[Alien/Shoot] 精算失敗: {type(err).__name__}: {err}", flush=True)
-                await interaction.followup.send(
-                    "精算の途中でエラーになりました。/zzzadmin_shootfinish を再実行してください。二重付与は防止しています。",
-                    ephemeral=True,
-                )
+        except ValueError as exc:
+            await interaction.followup.send(str(exc), ephemeral=True)
+        except Exception as exc:
+            print(f"[Alien/Shoot] 企画名確定失敗: {type(exc).__name__}: {exc}", flush=True)
+            await interaction.followup.send(
+                "企画名の確定が完了しませんでした。"
+                "再度 /zzzadmin_shootname で再試行してください。"
+                "撮影IDによる二重スコア付与は防止します。",
+                ephemeral=True,
+            )
 
     async def notify_worker(self, guild_id: int, user_id: int, text: str):
         try:
@@ -339,16 +435,13 @@ class ShootingCog(commands.Cog):
                         {"_id": "current"},
                         {"$set": {f"participants.{uid}.ended_at": end}},
                     )
-                    minutes, amount, newly = await asyncio.to_thread(
-                        self.store.grant_shoot, int(uid), shoot["shoot_id"],
-                        person["joined_at"], end,
+                    from alien_bot.score_store import duration_reward
+                    minutes, amount = duration_reward(person["joined_at"], end)
+                    # 早退の終了時刻だけ確定。スコアは企画名登録後に付与する。
+                    response_text = (
+                        f"早退確定：<@{uid}> {minutes}分、"
+                        f"企画名登録後に+{score_text(amount)} スコアを付与"
                     )
-                    if newly:
-                        await self.notify_worker(
-                            interaction.guild.id, int(uid),
-                            f"🎬 早退として確定しました。{minutes}分 → **{score_text(amount)} スコア** 獲得しました。",
-                        )
-                    response_text = f"早退確定：<@{uid}> {minutes}分、+{score_text(amount)} スコア"
                 await asyncio.to_thread(
                     self.store.confirmations.update_one,
                     {"_id": confirm["_id"], "state": "pending"},
