@@ -97,6 +97,27 @@ class DriveClient:
         files = response.get("files") or []
         return files[0]["id"] if files else None
 
+    def find_file(self, parent_id: str, filename: str) -> str | None:
+        """再試行時に同じ画像を二重保存しないための存在確認。"""
+        escaped = filename.replace("\\", "\\\\").replace("'", "\\'")
+        query = (
+            f"name = '{escaped}' and '{parent_id}' in parents "
+            "and trashed = false"
+        )
+        result = self._json(
+            "GET", DRIVE_BASE + "/files",
+            params={"q": query, "fields": "files(id),nextPageToken",
+                    "pageSize": 100},
+        )
+        return (result.get("files") or [{}])[0].get("id")
+
+    def file_info(self, file_id: str) -> dict:
+        """完成動画の共有をそのフォルダ内のファイルだけに限定するための確認。"""
+        return self._json(
+            "GET", DRIVE_BASE + f"/files/{file_id}",
+            params={"fields": "id,name,parents,mimeType,webViewLink"},
+        )
+
     def create_folder(self, name: str, parent_id: str | None = None) -> str:
         metadata = {"name": safe_name(name), "mimeType": FOLDER_MIME}
         if parent_id:
