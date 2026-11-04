@@ -694,6 +694,12 @@ class PlanCog(commands.Cog):
                     ), "updated_at": utcnow(),
                 }},
             )
+            # 投稿後にリンクを修正した場合は、その出演者の再送だけ許可する。
+            if item["status"] == STATUS_POSTED:
+                await asyncio.to_thread(
+                    self.data.notices.delete_one,
+                    {"_id": f"posted:{item['_id']}:{member.id}"},
+                )
             await interaction.response.send_message(
                 "出演者ごとの投稿・コラボ招待先を記録しました。",
                 ephemeral=True,
