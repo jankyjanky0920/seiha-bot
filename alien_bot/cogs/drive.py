@@ -430,6 +430,53 @@ class DriveCog(commands.Cog):
             await interaction.followup.send("共有に失敗しました。", ephemeral=True)
 
     @app_commands.command(
+        name="zzzadmin_drive_project_remove",
+        description="企画から外れたメンバーの共有権限を解除【管理者】",
+    )
+    async def project_remove(
+        self, interaction: discord.Interaction,
+        project_id: str, member: discord.Member,
+    ):
+        if not self.admin(interaction):
+            await interaction.response.send_message("管理者専用です。", ephemeral=True)
+            return
+        await interaction.response.defer(ephemeral=True, thinking=True)
+        try:
+            project = await asyncio.to_thread(
+                self.projects.find_one, {"_id": self.project_key(project_id)}
+            )
+            profile = await asyncio.to_thread(
+                self.members.find_one, {"_id": self.member_key(member.id)}
+            )
+            if not project or not profile:
+                await interaction.followup.send(
+                    "企画またはGoogleアカウントの登録が見つかりません。",
+                    ephemeral=True,
+                )
+                return
+            await asyncio.to_thread(
+                self.drive.revoke, project["folder_id"], profile["email"]
+            )
+            await asyncio.to_thread(
+                self.projects.update_one,
+                {"_id": self.project_key(project_id)},
+                {"$pull": {"member_ids": str(member.id)}},
+            )
+            await interaction.followup.send(
+                f"{member.display_name}さんの企画フォルダアクセス権を解除しました。",
+                ephemeral=True,
+            )
+        except Exception as exc:
+            print(
+                f"[Alien/Drive] project revoke error: {type(exc).__name__}",
+                flush=True,
+            )
+            await interaction.followup.send(
+                "企画の共有解除に失敗しました。",
+                ephemeral=True,
+            )
+
+    @app_commands.command(
         name="zzzadmin_drive_projects",
         description="作成済み企画IDとフォルダを一覧【管理者】",
     )
