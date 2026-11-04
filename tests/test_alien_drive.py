@@ -145,7 +145,7 @@ class DrivePolicyTests(unittest.TestCase):
             cog = object.__new__(DriveCog)
             cog.bot = SimpleNamespace(target_guild_id=1)
             cog.members = SimpleNamespace(find_one=Mock(
-                return_value={"email": "user@gmail.com"}
+                return_value={"email": "user@gmail.com", "state": "active"}
             ))
             cog.drive = SimpleNamespace(
                 file_info=Mock(return_value={"parents": ["another_folder"]}),
