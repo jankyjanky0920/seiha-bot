@@ -171,3 +171,70 @@ Renderが停止していた時刻の18時通知は遡って投稿しません。
 ### バージョン・制限
 
 Discord.py **2.7以降**の `discord.ui.FileUpload` が必要です。画像保存メッセージと管理者用作業場へのアクセス権限を確認してください。外部投稿・SNS自動招待機能は本機能を追加しただけでは動きません。
+
+## Google Drive連携（第5段階・専用Googleアカウント）
+
+この機能は**デフォルトOFF**です。サーバー専用の無料Googleアカウント（15GBはGoogle各サービスとの共用）をOAuth 2.0で認証し、Botが作成したフォルダ／ファイルだけを操作します。
+
+**権限方針**: 共通素材と利用規約は、管理者がGoogleメールを確認・登録したメンバー全員に閲覧権限を付与します。個人素材はその本人と専用Googleアカウント、企画素材は指定された関係者と専用Googleアカウントのみ。完成動画は管理者が送付先を個別指定します。**「リンクを知っている全員（anyone）」には絶対に設定しません。** Discord IDだけではGoogleアカウントの所有を証明できないため、**Googleメールの本人確認は管理者側で行ってください。** Google未登録のメンバーには共有リンクの閲覧権限がありません。
+
+### 準備：サーバー専用アカウントで認証する
+
+1. [Google Cloud Console](https://console.cloud.google.com/) でGoogle Cloudプロジェクトを作成し、**Google Drive API** を有効化します。
+2. OAuth同意画面／Google Auth Platformを設定します。対象はサーバー専用Googleアカウントだけで構いません。**OAuthクライアントの種類「デスクトップアプリ」**を新規作成し、クライアントID・クライアントシークレットを取得します。
+3. ローカルPC（Macなど）で `python3 -m pip install google-auth google-auth-oauthlib` を実行し、環境変数 `GOOGLE_DRIVE_CLIENT_ID`、`GOOGLE_DRIVE_CLIENT_SECRET` を設定して `python3 scripts/alien_drive_auth.py` を実行します。ブラウザで**サーバー専用Googleアカウント**にログインし、OAuthの許可を完了してください。
+4. 出力されたリフレッシュトークンとID、シークレットを**Render Environmentだけ**に設定します。GitHub、Discord、ChatGPT、ログ、公開URLには貼り付けないでください。
+5. **GoogleのOAuth同意画面がExternal / Testingのままだと、リフレッシュトークンは通常7日で失効します。** 継続運用前に公開ステータスとアプリの審査／警告画面を確認してください。機密範囲を抑えるため `drive.file` スコープだけを要求します。
+6. Renderの環境変数を設定し、デプロイ後に `/zzzadmin_drive_setup` を実行します。
+
+```dotenv
+ALIEN_DRIVE_ENABLED=1
+GOOGLE_DRIVE_CLIENT_ID=(OAuthクライアントID)
+GOOGLE_DRIVE_CLIENT_SECRET=(OAuthクライアントシークレット)
+GOOGLE_DRIVE_REFRESH_TOKEN=(ローカルPCで取得した値)
+```
+
+必要な認証情報が揃わない場合、Drive用Cogは起動をスキップします。従来の星人Bot・seiha-botは継続動作します。
+
+### 作成するフォルダ
+
+`/zzzadmin_drive_setup` が、専用Googleアカウントのマイドライブ直下に以下の**Bot所有フォルダ**を作ります。親フォルダ全体にはメンバーを招待しません。
+
+```
+んきー。んきー。帝国/
+  00_利用規約/         ← 登録済みメンバー全員（閲覧）
+  01_共通素材/         ← 登録済みメンバー全員（閲覧）
+  02_メンバー素材/
+    <DiscordユーザーID>/ ← 本人のみ（閲覧、提出は/edit_info）
+  03_企画別素材/
+    <企画ID>_<企画名>/  ← その企画の関係者だけ（閲覧/編集）
+  04_完成動画/         ← 管理者のみ（完成ファイル単位で配布）
+```
+
+### コマンド
+
+| コマンド | 対象 | 内容 |
+| --- | --- | --- |
+| `/zzzadmin_drive_setup` | 管理者 | フォルダを初期作成 |
+| `/zzzadmin_drive_member member email` | 管理者 | 本人確認済みGoogleメールへ共通素材・規約・個人素材を招待 |
+| `/zzzadmin_drive_revoke member` | 管理者 | 当該メンバーの共通・個人・企画・配布済み完成動画への権限を解除 |
+| `/zzzadmin_drive_project name` | 管理者 | 関係者専用の企画フォルダを新規作成し、企画IDを返す |
+| `/zzzadmin_drive_project_access project_id member role` | 管理者 | 企画ごとに閲覧者／編集者を追加 |
+| `/zzzadmin_drive_project_remove project_id member` | 管理者 | 企画から外れた人の、その企画の閲覧／編集権限だけを解除 |
+| `/zzzadmin_drive_projects` | 管理者 | 企画IDとフォルダの一覧 |
+| `/zzzadmin_drive_upload area attachment` | 管理者 | 共通素材・利用規約・完成動画（20MB以下）を直接保存し、ファイルIDを返す |
+| `/zzzadmin_drive_finished_access file_id member` | 管理者 | Botが保存した完成動画を指定したGoogleアカウントにだけ共有・作業場へ通知 |
+| `/zzzadmin_drive_sync` | 管理者 | 過去の `/edit_info` 提出画像をDriveへ転送予約 |
+| `/files` | メンバー | 共通素材と利用規約のフォルダを非公開表示 |
+| `/my_files` | メンバー | 自分の素材、参加企画、配布済み完成動画を非公開表示 |
+
+`/edit_info` で新しく提出された立ち絵・表情差分は、従来どおり管理者専用Discordアーカイブに保存し、Google Driveへの転送も永続キューで行います。Driveへの転送に失敗しても元のDiscord画像は残り、15分ごとに再試行します。転送した写真はDiscord添付IDを先頭に付け、再試行時の重複保存を防ぎます。既存の画像は `/zzzadmin_drive_sync` で取り込みます。
+
+### ファイル受け渡し時の注意点
+
+- **大きな完成動画はGoogle Drive Web画面から直接アップロード**してください。Discordコマンド経由の単一ファイルアップロードはRenderメモリ保護のため20MBまでです。Web画面から直接置いたファイルは `drive.file` 権限のBotから直接共有できない場合があるため、その場合はGoogle Drive画面でファイル単位の閲覧権限を関係者に手動で付けてください。将来、OAuthによるGoogle Pickerなどのファイル指定機能を追加できます。
+- **共通素材もGoogle DriveのWeb画面で対象フォルダへ直接置けます。** 関係者には親フォルダの閲覧権限が継承されます。
+- Discordから退室した人は、登録Googleメールに対する共通・個人・企画・個別完成動画のアクセス権を解除します。**Driveに保存した立ち絵は削除しません。** OAuth失効やAPIエラーで権限解除に失敗した場合はRenderのログに記録します。権限解除が正常かも時々管理者が確認してください。
+- 無料15GBは長編動画の保存量に注意が必要です。不要な動画の整理や、容量不足時の外部ストレージ追加は別途検討します。
+- **Googleアカウント単位で共有するため、Discordユーザー名とGoogleのメールアドレスの対応は管理者が確認する必要があります。** 誤登録すると意図しない相手にDriveの共有権限を付与します。
+

@@ -276,6 +276,18 @@ class EditInfoCog(commands.Cog):
                     },
                     True,
                 )
+            # Drive連携が有効な場合、Discord保管画像を安全に転送予約する。
+            # Driveの一時障害は提出完了や既存のDiscord画像保管に影響しない。
+            drive_cog = self.bot.get_cog("DriveCog")
+            if drive_cog is not None and archived is not None:
+                try:
+                    await drive_cog.enqueue_archived_pictures(member.id, archived)
+                    asyncio.create_task(drive_cog.process_import_jobs(limit=5))
+                except Exception as exc:
+                    print(
+                        f"[Alien/EditInfo] Drive転送予約失敗: {type(exc).__name__}",
+                        flush=True,
+                    )
             try:
                 workspace = await self.workspace(member.id)
                 if workspace:
