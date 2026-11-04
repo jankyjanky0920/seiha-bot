@@ -27,8 +27,12 @@ class AlienBot(commands.Bot):
         self.edit_info_enabled = os.environ.get(
             "ALIEN_EDIT_INFO_ENABLED", "0"
         ).strip().lower() in ("1", "true", "yes", "on")
+        self.drive_enabled = os.environ.get(
+            "ALIEN_DRIVE_ENABLED", "0"
+        ).strip().lower() in ("1", "true", "yes", "on")
         if (self.management_enabled or self.economy_enabled
-                or self.projects_enabled or self.edit_info_enabled):
+                or self.projects_enabled or self.edit_info_enabled
+                or self.drive_enabled):
             # 管理と撮影イベントで参加者を扱うため Members Intent が必要。
             intents.members = True
         if self.management_enabled:
@@ -52,6 +56,9 @@ class AlienBot(commands.Bot):
                 continue
             if module.name == "edit_info" and not self.edit_info_enabled:
                 print("[Alien] 編集情報提出は設定待ちのため無効", flush=True)
+                continue
+            if module.name == "drive" and not self.drive_enabled:
+                print("[Alien] Google Drive連携は設定待ちのため無効", flush=True)
                 continue
             await self.load_extension(f"alien_bot.cogs.{module.name}")
 
