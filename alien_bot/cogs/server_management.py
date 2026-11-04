@@ -12,6 +12,7 @@ from pymongo import MongoClient
 
 
 TASK_CATEGORY_ID = 1561752871530270840
+DEPARTURE_LOG_CHANNEL_ID = 1541546018531708970
 ADMIN_ROLE_ID = 1541554412126994594
 NOTIFICATION_ROLES = {
     "配信募集通知": 1561755518878617630,
@@ -80,7 +81,7 @@ class ServerManagement(commands.Cog):
         guild = member.guild
         channel = await self.find_workspace(member)
         if channel:
-            # サーバーに再参加した際、以前の作業場を再び使えるようにする。
+            # 作業場が存在するユーザーの閲覧権限を復元する。
             overwrite = channel.overwrites_for(member)
             if overwrite.view_channel is not True:
                 await channel.set_permissions(
@@ -221,11 +222,104 @@ class ServerManagement(commands.Cog):
         if not self.is_worker(before) and self.is_worker(after):
             await self.synchronize_member(after, joined=True)
 
+    @staticmethod
+    def is_owned_workspace(channel, user_id: int) -> bool:
+        """チャンネル名ではなくカテゴリと所有者マーカーの両方で確認する。"""
+        return (
+            isinstance(channel, discord.TextChannel)
+            and channel.category_id == TASK_CATEGORY_ID
+            and channel.topic == f"alien_workspace_owner:{user_id}"
+        )
+
+    async def remove_departed_workspace(self, member: discord.Member):
+        """サーバー退室者の本人作業場のみ削除し、MongoDBの紐付けを消す。"""
+        async with self.member_lock(member.id):
+            # 退室直後に再参加した場合は新しい作業場を誤削除しない。
+            if member.guild.get_member(member.id) is not None:
+                print(
+                    f"[Alien/Workspace] 再参加済みのため削除を見送り: member={member.id}",
+                    flush=True,
+                )
+                return
+
+            key = self.workspace_key(member.id)
+            record = await asyncio.to_thread(
+                self.workspaces.find_one, {"_id": key}
+            )
+            channel = None
+            if record and record.get("channel_id"):
+                candidate = member.guild.get_channel(record["channel_id"])
+                if candidate is None:
+                    try:
+                        candidate = await self.bot.fetch_channel(record["channel_id"])
+                    except discord.NotFound:
+                        candidate = None
+                if self.is_owned_workspace(candidate, member.id):
+                    channel = candidate
+
+            if channel is None:
+                category = member.guild.get_channel(TASK_CATEGORY_ID)
+                if isinstance(category, discord.CategoryChannel):
+                    channel = next(
+                        (candidate for candidate in category.text_channels
+                         if self.is_owned_workspace(candidate, member.id)),
+                        None,
+                    )
+
+            if channel is not None:
+                try:
+                    await channel.delete(
+                        reason=f"サーバー退室のため本人の作業場を削除（{member.id}）"
+                    )
+                except discord.NotFound:
+                    # すでに削除されたチャンネルなら紐付けだけ消す。
+                    pass
+
+            if record:
+                await asyncio.to_thread(self.workspaces.delete_one, {"_id": key})
+            print(
+                f"[Alien/Workspace] 退室者の作業場を整理: member={member.id} "
+                f"channel={channel.id if channel else 'なし'}",
+                flush=True,
+            )
+
     @commands.Cog.listener()
     async def on_member_remove(self, member: discord.Member):
-        # 記録や作業場の誤削除を防止。再参加したら同じ作業場を再利用する。
-        if member.guild.id == self.guild_id and not member.bot:
-            print(f"[Alien/Workspace] 退出: member={member.id} (作業場は保持)", flush=True)
+        if member.guild.id != self.guild_id:
+            return
+
+        # ログへの通知と作業場の削除は別々に試み、一方の失敗で止めない。
+        try:
+            channel = (
+                member.guild.get_channel(DEPARTURE_LOG_CHANNEL_ID)
+                or await self.bot.fetch_channel(DEPARTURE_LOG_CHANNEL_ID)
+            )
+            account_name = discord.utils.escape_mentions(
+                discord.utils.escape_markdown(member.name)
+            )
+            await channel.send(
+                f"{account_name}が退室しました。",
+                allowed_mentions=discord.AllowedMentions.none(),
+            )
+        except (discord.Forbidden, discord.HTTPException, OSError) as exc:
+            print(
+                f"[Alien/Workspace] 退室記録の送信に失敗 member={member.id}: {exc}",
+                flush=True,
+            )
+
+        try:
+            await self.remove_departed_workspace(member)
+        except (discord.Forbidden, discord.HTTPException, OSError) as exc:
+            print(
+                f"[Alien/Workspace] 作業場削除に失敗 member={member.id}: {exc}",
+                flush=True,
+            )
+        except Exception as exc:
+            print(
+                f"[Alien/Workspace] 退室処理エラー member={member.id}: "
+                f"{type(exc).__name__}: {exc}",
+                flush=True,
+            )
 
     @app_commands.command(name="notice", description="自分の通知ロールを付け外しします")
     @app_commands.describe(what="変更したい通知の種類")
