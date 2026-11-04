@@ -464,6 +464,31 @@ class PlanCog(commands.Cog):
                         "updated_at": utcnow(),
                     }},
                 )
+                drive_note = ""
+                drive_cog = self.bot.get_cog("DriveCog")
+                if drive_cog is not None:
+                    try:
+                        outcome = await drive_cog.grant_review_access(item, url)
+                        if outcome and outcome["unshared"]:
+                            drive_note = (
+                                "\\nDriveの自動共有が未完了："
+                                + ", ".join(outcome["unshared"])
+                                + "。Drive側で個別に閲覧権限を設定してください。"
+                            )
+                    except Exception as exc:
+                        print(
+                            f"[Alien/Plan] Drive確認用動画共有失敗: {type(exc).__name__}",
+                            flush=True,
+                        )
+                        drive_note = (
+                            "\\nDrive側の閲覧権限を自動設定できませんでした。"
+                            "手動で出演者を共有先に追加してください。"
+                        )
+                else:
+                    drive_note = (
+                        "\\nGoogle Driveが未接続のため、閲覧権限は"
+                        "Google Drive側で手動設定してください。"
+                    )
                 failed = []
                 for uid in item["member_ids"]:
                     try:
@@ -497,8 +522,7 @@ class PlanCog(commands.Cog):
             await interaction.followup.send(
                 "動画確認を送信しました。"
                 + (f"未送信: {', '.join(failed)}" if failed else " 全員に送信済みです。")
-                + "\n※Driveの閲覧権限は別途必要です。接続前は管理者が"
-                "Google Drive側で出演者へ個別共有してください。",
+                + drive_note,
                 ephemeral=True,
             )
         except ValueError as exc:
