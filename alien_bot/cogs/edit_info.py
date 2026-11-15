@@ -75,21 +75,21 @@ class EditInfoModal(discord.ui.Modal, title="動画編集に使用する情報�
     )
     linked_sns = discord.ui.Label(
         text="④ 連携用SNS（任意）",
-        description="コラボレーション依頼やタグ付けを行うYouTube、X、TikTokアカウントをリンクで記述してください。",
+        description="コラボレーション依頼・タグ付け用のYouTube、X、TikTokです。URLだけでも自由な書き方でもOKです。",
         component=discord.ui.TextInput(
             required=False,
             style=discord.TextStyle.paragraph,
-            placeholder="YouTube: https://youtube.com/@...\nTikTok: https://www.tiktok.com/@...\nX: https://x.com/...",
+            placeholder="https://youtube.com/@...\nhttps://www.tiktok.com/@...\nhttps://x.com/...",
             max_length=1700,
         ),
     )
     description_sns = discord.ui.Label(
         text="⑤ 概要欄用SNS（最大3件）",
-        description="概要欄に書いてほしいSNSを三つまで記入してください。YouTube、X、TikTokの場合は「同上」で構いません。",
+        description="概要欄に載せたいSNSを3件まで。URLのみでもOK。YouTube、X、TikTokは「同上」も使えます。",
         component=discord.ui.TextInput(
             required=False,
             style=discord.TextStyle.paragraph,
-            placeholder="YouTube同上\npixiv: https://www.pixiv.net/users/...",
+            placeholder="YouTube同上\nhttps://www.pixiv.net/users/...",
             max_length=1700,
         ),
     )
@@ -383,15 +383,21 @@ class EditInfoCog(commands.Cog):
                     report.append(
                         f"  - {a['filename']} (保管先: https://discord.com/channels/{guild.id}/{a['channel_id']}/{a['message_id']})"
                     )
-                report.append("連携用SNS:")
+                report.append("連携用SNS（自動判別）:")
                 report.extend(
                     f"  {platform}: {url}" for platform, url in linked.items()
                 )
-                report.append("概要欄用SNS:")
+                if profile.get("linked_sns_raw"):
+                    report.append("連携用SNS（提出された原文）:")
+                    report.append(profile["linked_sns_raw"])
+                report.append("概要欄用SNS（自動判別）:")
                 report.extend(
                     f"  {site}: {value}"
                     for site, value in description_resolved(descriptions, linked).items()
                 )
+                if profile.get("description_sns_raw"):
+                    report.append("概要欄用SNS（提出された原文）:")
+                    report.append(profile["description_sns_raw"])
                 report.append(f"エラー連絡: {profile.get('error') or 'なし'}")
                 report.append(f"バージョン: {profile.get('version', 0)}")
                 reports.append("\n".join(report) + "\n")
