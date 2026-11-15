@@ -72,9 +72,65 @@ class TestEditInfo(unittest.TestCase):
                 "c: https://example.com\nd: https://example.com", {},
             )
 
-    def test_linked_url_wrong_domain(self):
-        with self.assertRaises(ValueError):
-            parse_linked("YouTube: https://x.com/wrong")
+    def test_mismatched_platform_label_is_not_an_error(self):
+        # SNS名とURLの種類が違っていても、URLを優先して保存する。
+        parsed = parse_linked("YouTube: https://x.com/wrong")
+        self.assertEqual(parsed["X"], "https://x.com/wrong")
+
+    def test_sns_links_without_required_format(self):
+        data = parse_edit_fields(
+            "", "",
+            "https://www.youtube.com/@someone\n"
+            "x.com/someone\n"
+            "www.tiktok.com/@someone",
+            "",
+        )
+        self.assertEqual(data["linked_sns"]["YouTube"], "https://www.youtube.com/@someone")
+        self.assertEqual(data["linked_sns"]["X"], "https://x.com/someone")
+        self.assertEqual(data["linked_sns"]["TikTok"], "https://www.tiktok.com/@someone")
+        self.assertIn("x.com/someone", data["linked_sns_raw"])
+
+    def test_flexible_sns_text_does_not_block_submission(self):
+        # URLでなくても拒否せず、原文を管理者に渡す。
+        example = "このアカウントでお願いします：@testuser"
+        data = parse_edit_fields("", "", example, "")
+        self.assertEqual(data["linked_sns_raw"], example)
+        self.assertEqual(data["linked_sns"], {})
+
+        odd_url = "https://xn--26jzf6ayai9cybo9117eusc./"
+        result = parse_edit_fields("", "", odd_url, "")
+        self.assertEqual(result["linked_sns_raw"], odd_url)
+
+        named = parse_linked("Youtube @someone\nX @someone_else")
+        self.assertEqual(named["YouTube"], "@someone")
+        self.assertEqual(named["X"], "@someone_else")
+
+    def test_description_url_only_and_same_as_without_link(self):
+        desc = parse_description(
+            "https://www.pixiv.net/users/123\nYouTube同上", {}
+        )
+        self.assertEqual(len(desc), 2)
+        self.assertEqual(desc["YouTube"], {"same_as": "YouTube"})
+        self.assertEqual(
+            description_resolved(desc, {})["YouTube"], "YouTube同上"
+        )
+        self.assertEqual(
+            description_resolved(desc, {})["pixiv.net"],
+            "https://www.pixiv.net/users/123",
+        )
+
+    def test_description_freeform_notes_and_whitespace_label(self):
+        data = parse_edit_fields(
+            "", "", "", "pixiv https://www.pixiv.net/users/10\nX: 同上\n自作ホームページ",
+        )
+        self.assertEqual(len(data["description_sns"]), 3)
+        self.assertEqual(
+            data["description_sns"]["pixiv"],
+            {"url": "https://www.pixiv.net/users/10"},
+        )
+        self.assertEqual(data["description_sns"]["X"], {"same_as": "X"})
+        self.assertEqual(data["description_sns"]["メモ1"]["url"], "自作ホームページ")
+        self.assertEqual(data["description_sns_raw"].count("\n"), 2)
 
     def test_empty_fields_do_not_erase_social_accounts(self):
         previous = {
@@ -103,9 +159,9 @@ class TestEditInfo(unittest.TestCase):
         self.assertIsInstance(modal.description_sns, discord.ui.Label)
         self.assertIsInstance(modal.linked_sns.component, discord.ui.TextInput)
         self.assertIsInstance(modal.description_sns.component, discord.ui.TextInput)
-        self.assertIn("コラボレーション依頼やタグ付け", modal.linked_sns.description)
-        self.assertIn("YouTube、X、TikTok", modal.linked_sns.description)
-        self.assertIn("SNSを三つまで", modal.description_sns.description)
+        self.assertIn("コラボレーション依頼", modal.linked_sns.description)
+        self.assertIn("URLだけでも", modal.linked_sns.description)
+        self.assertIn("3件まで", modal.description_sns.description)
         self.assertIn("「同上」", modal.description_sns.description)
         self.assertLessEqual(len(modal.linked_sns.description), 100)
         self.assertLessEqual(len(modal.description_sns.description), 100)
