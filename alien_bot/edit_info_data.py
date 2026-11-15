@@ -221,7 +221,7 @@ def due_notification(profile: dict | None) -> str | None:
 
 def description_resolved(description_sns: dict, linked_sns: dict) -> dict:
     return {
-        name: linked_sns.get(value["same_as"], "")
+        name: (linked_sns or {}).get(value["same_as"]) or (value["same_as"] + "同上")
         if "same_as" in value else value.get("url", "")
         for name, value in (description_sns or {}).items()
     }
