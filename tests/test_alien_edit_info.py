@@ -115,7 +115,7 @@ class TestEditInfo(unittest.TestCase):
             description_resolved(desc, {})["YouTube"], "YouTube同上"
         )
         self.assertEqual(
-            description_resolved(desc, {})["pixiv.net"],
+            description_resolved(desc, {})["pixiv"],
             "https://www.pixiv.net/users/123",
         )
 
