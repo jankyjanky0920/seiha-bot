@@ -149,7 +149,7 @@ def parse_description(text: str, linked: dict, previous: dict | None = None) -> 
                 _safe_title(label, "") if label and label.lower() not in ("http", "https")
                 else ""
             )
-            title = title or _platform_from_host(host) or host.removeprefix("www.")
+            title = title or _platform_from_host(host) or host.removeprefix("www.").split(".")[0]
             title = _safe_title(title, "SNS")
             result[title] = {"url": url}
             # 1行に複数リンクが書かれていても内容を失わないよう原文も残す。
