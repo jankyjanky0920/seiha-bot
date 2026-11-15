@@ -42,57 +42,135 @@ def platform_name(value: str) -> str:
     return platform
 
 
-def parse_linked(text: str, previous: dict | None = None) -> dict:
-    result = deepcopy(previous or {})
-    for line in text.splitlines():
-        if not line.strip():
+# SNS欄は自由入力。分かるURLのみ構造化し、判断できない情報は原文で保持する。
+# 「YouTube: ...」という書式や https:// の有無は必須ではない。
+LINK_RE = re.compile(
+    r"(?i)(?:https?://|www\.|"
+    r"(?:youtube\.com|youtu\.be|tiktok\.com|x\.com|twitter\.com|"
+    r"pixiv\.net|instagram\.com)/)"
+    r"[^\s<>\u3000，、]+"
+)
+LABEL_RE = re.compile(r"^\s*([^\s:：=＝]{1,40})\s*[:：=＝]\s*(.*?)\s*$")
+PLAIN_LABEL_RE = re.compile(r"^\s*([^\s:：=＝]{1,40})\s+(.+?)\s*$")
+
+
+def _platform_from_host(host: str) -> str | None:
+    host = host.lower().rstrip(".")
+    for name, domains in HOSTS.items():
+        if any(host == domain or host.endswith("." + domain) for domain in domains):
+            return name
+    return None
+
+
+def _links_in(text: str) -> list[tuple[str, str]]:
+    found = []
+    for match in LINK_RE.finditer(text):
+        value = match.group().rstrip(".,。、，）)]}\"'")
+        if not value:
             continue
-        if ":" not in line and "：" not in line:
-            raise ValueError("連携用SNSは「YouTube: https://...」と入力してください。")
-        key, url = re.split(r"[:：]", line.strip(), maxsplit=1)
-        platform = platform_name(key.strip())
-        if url.strip() in ("削除", "remove", "REMOVE"):
-            result.pop(platform, None)
-        else:
-            result[platform] = valid_url(url, platform=platform)
-    return result
+        url = value if value.lower().startswith(("http://", "https://")) else "https://" + value
+        try:
+            parts = urlsplit(url)
+            if not parts.hostname:
+                continue
+            found.append((url, parts.hostname.lower()))
+        except ValueError:
+            continue
+    return found
 
 
-def parse_description(text: str, linked: dict, previous: dict | None = None) -> dict:
+def _label_and_value(line: str) -> tuple[str | None, str]:
+    match = LABEL_RE.match(line)
+    if match:
+        return match.group(1), match.group(2)
+    match = PLAIN_LABEL_RE.match(line)
+    if match and not match.group(1).lower().startswith(("http", "www")):
+        return match.group(1), match.group(2)
+    return None, line.strip()
+
+
+def parse_linked(text: str, previous: dict | None = None) -> dict:
+    """自由入力を受け入れ、判別可能なSNSリンクだけを自動的に分類する。
+
+    判別できない文・特殊URLも拒否せず、parse_edit_fields側で原文を保存する。
+    """
     result = deepcopy(previous or {})
     for line in text.splitlines():
         line = line.strip()
         if not line:
             continue
-        # 「X: 同上」は下のキー/値形式で処理する。先に同上と誤認しない。
-        match = SAME_RE.fullmatch(line) if ":" not in line and "：" not in line else None
-        if match:
-            platform = platform_name(match.group(1).strip())
-            if platform not in linked:
-                raise ValueError(f"「{platform}同上」に必要な連携用SNSが未登録です。")
+        label, value = _label_and_value(line)
+        explicit = ALIASES.get((label or "").lower().replace(" ", ""))
+        if explicit and value.lower() in ("削除", "remove"):
+            result.pop(explicit, None)
+            continue
+        links = _links_in(line)
+        if links:
+            for url, host in links:
+                platform = _platform_from_host(host) or explicit
+                if platform:
+                    result[platform] = url
+        elif explicit and value:
+            # URL以外のアカウント名も受付可。管理者は原文を確認できる。
+            result[explicit] = value.strip()
+    return result
+
+
+def _safe_title(label: str, fallback: str) -> str:
+    label = label.strip().replace(".", "・").replace("$", "＄")
+    return label[:40] if label else fallback
+
+
+def parse_description(text: str, linked: dict, previous: dict | None = None) -> dict:
+    """概要欄は形式自由。1行=1件を基本とし、同上・URLのみも受付可。"""
+    result = deepcopy(previous or {})
+    for line in text.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        label, value = _label_and_value(line)
+        direct_same = SAME_RE.fullmatch(line) if not LABEL_RE.match(line) else None
+        platform = ALIASES.get((label or "").lower().replace(" ", ""))
+        if direct_same:
+            name = ALIASES.get(direct_same.group(1).strip().lower().replace(" ", ""))
+            if name:
+                result[name] = {"same_as": name}
+                continue
+        if label and value.lower() in ("削除", "remove"):
+            result.pop(platform or _safe_title(label, "その他"), None)
+            continue
+        if label and value.strip() == "同上" and platform:
             result[platform] = {"same_as": platform}
             continue
-        if ":" not in line and "：" not in line:
-            raise ValueError("概要欄用SNSは「pixiv: https://...」または「YouTube同上」で入力してください。")
-        key, value = re.split(r"[:：]", line, maxsplit=1)
-        key = key.strip()
-        value = value.strip()
-        if not key or len(key) > 40 or "." in key or "$" in key:
-            raise ValueError("SNS名は1〜40文字で、ピリオドと$を含めないでください。")
-        if value == "同上":
-            platform = platform_name(key)
-            if platform not in linked:
-                raise ValueError(f"「{platform}同上」に必要な連携用SNSが未登録です。")
-            result[platform] = {"same_as": platform}
-        elif value in ("削除", "remove", "REMOVE"):
-            result.pop(key, None)
+        links = _links_in(line)
+        if links:
+            url, host = links[0]
+            title = platform or (
+                _safe_title(label, "") if label and label.lower() not in ("http", "https")
+                else ""
+            )
+            title = title or _platform_from_host(host) or host.removeprefix("www.").split(".")[0]
+            title = _safe_title(title, "SNS")
+            result[title] = {"url": url}
+            # 1行に複数リンクが書かれていても内容を失わないよう原文も残す。
+            if len(links) > 1:
+                result[title] = {"url": line}
+        elif label:
+            title = _safe_title(label, "SNS")
+            result[platform or title] = {"url": value or line}
         else:
-            result[key] = {"url": valid_url(value)}
+            # URL以外のSNS名・アカウント名・メモもそのまま保存する。
+            note_key = next(
+                (key for key, item in result.items()
+                 if item.get("url") == line), None
+            )
+            if note_key is None:
+                number = 1
+                while f"メモ{number}" in result:
+                    number += 1
+                result[f"メモ{number}"] = {"url": line}
     if len(result) > 3:
-        raise ValueError("概要欄用SNSは1人3つまでです。")
-    for entry in result.values():
-        if "same_as" in entry and entry["same_as"] not in linked:
-            raise ValueError("概要欄の「同上」は、対応する連携用SNSが必要です。")
+        raise ValueError("概要欄用SNSは3件までにしてください。")
     return result
 
 
@@ -114,16 +192,14 @@ def parse_edit_fields(
         changed["name"] = value
     if linked_text.strip():
         changed["linked_sns"] = parse_linked(linked_text, previous.get("linked_sns"))
+        # 不明なアカウント・特殊なURLも取りこぼさないよう元入力を保存する。
+        changed["linked_sns_raw"] = linked_text.strip()
     linked = changed.get("linked_sns", previous.get("linked_sns", {}))
     if description_text.strip():
         changed["description_sns"] = parse_description(
             description_text, linked, previous.get("description_sns")
         )
-    # 連携用SNSを削除すると既存の「同上」も使えなくなる。
-    if "linked_sns" in changed:
-        for entry in previous.get("description_sns", {}).values():
-            if "same_as" in entry and entry["same_as"] not in linked and "description_sns" not in changed:
-                raise ValueError("連携用SNSを削除する場合、概要欄側の「同上」も削除してください。")
+        changed["description_sns_raw"] = description_text.strip()
     return changed
 
 
@@ -145,7 +221,7 @@ def due_notification(profile: dict | None) -> str | None:
 
 def description_resolved(description_sns: dict, linked_sns: dict) -> dict:
     return {
-        name: linked_sns.get(value["same_as"], "")
+        name: (linked_sns or {}).get(value["same_as"]) or (value["same_as"] + "同上")
         if "same_as" in value else value.get("url", "")
         for name, value in (description_sns or {}).items()
     }
